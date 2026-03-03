@@ -146,6 +146,20 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
+    const detailsCode = readConnectErrorDetailCode(this.pendingConnectError?.details);
+    if (
+      detailsCode === "AUTH_TOKEN_MISSING" ||
+      detailsCode === "AUTH_PASSWORD_MISSING" ||
+      detailsCode === "AUTH_TOKEN_MISMATCH" ||
+      detailsCode === "AUTH_PASSWORD_MISMATCH" ||
+      detailsCode === "AUTH_DEVICE_TOKEN_MISMATCH" ||
+      detailsCode === "PAIRING_REQUIRED" ||
+      detailsCode === "DEVICE_IDENTITY_REQUIRED" ||
+      detailsCode === "CONTROL_UI_DEVICE_IDENTITY_REQUIRED"
+    ) {
+      return;
+    }
+
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
     window.setTimeout(() => this.connect(), delay);

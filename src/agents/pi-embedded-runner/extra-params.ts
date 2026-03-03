@@ -146,13 +146,21 @@ function createStreamFnWithExtraParams(
       ? (extraParams.provider as Record<string, unknown>)
       : undefined;
 
-  if (Object.keys(streamParams).length === 0 && !providerRouting) {
+  // Support injecting a `thinking` field directly into the API request payload.
+  // Used to control thinking mode for models like Doubao Seed (Volcengine) that
+  // accept `{ thinking: { type: "disabled" } }` in the request body.
+  const thinkingPayload = extraParams.thinking !== undefined ? extraParams.thinking : undefined;
+
+  if (Object.keys(streamParams).length === 0 && !providerRouting && thinkingPayload === undefined) {
     return undefined;
   }
 
   log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
   if (providerRouting) {
     log.debug(`OpenRouter provider routing: ${JSON.stringify(providerRouting)}`);
+  }
+  if (thinkingPayload !== undefined) {
+    log.debug(`injecting thinking payload: ${JSON.stringify(thinkingPayload)}`);
   }
 
   const underlying = baseStreamFn ?? streamSimple;
@@ -165,6 +173,19 @@ function createStreamFnWithExtraParams(
           compat: { ...model.compat, openRouterRouting: providerRouting },
         } as unknown as typeof model)
       : model;
+    if (thinkingPayload !== undefined) {
+      const originalOnPayload = options?.onPayload;
+      return underlying(effectiveModel, context, {
+        ...streamParams,
+        ...options,
+        onPayload: (payload) => {
+          if (payload && typeof payload === "object") {
+            (payload as Record<string, unknown>).thinking = thinkingPayload;
+          }
+          originalOnPayload?.(payload);
+        },
+      });
+    }
     return underlying(effectiveModel, context, {
       ...streamParams,
       ...options,

@@ -100,6 +100,100 @@ function buildTimeSection(params: { userTimezone?: string }) {
   return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
 }
 
+function buildProactivePlanningSection(params: {
+  availableTools: Set<string>;
+  isMinimal: boolean;
+}) {
+  if (params.isMinimal) {
+    return [];
+  }
+  const hasMaps =
+    params.availableTools.has("maps_route") ||
+    params.availableTools.has("maps_search") ||
+    params.availableTools.has("smart_trip");
+  if (!hasMaps) {
+    return [];
+  }
+
+  const hasSmartTrip = params.availableTools.has("smart_trip");
+  const hasNavImage = params.availableTools.has("maps_navigation_image");
+
+  if (hasSmartTrip) {
+    // 新智能出行流程
+    return [
+      "## Proactive Planning (Travel / Appointments)",
+      "When a user mentions going somewhere, do NOT reply immediately — call tools first, then give one comprehensive structured response.",
+      "",
+      "**STEP 1 — Always call `smart_trip` first:**",
+      "Call `smart_trip(origin, destination, city, arrival_time?)` — it returns multi-mode analysis (driving/transit/walking), parking difficulty, weather, and a scoring recommendation.",
+      "",
+      "**STEP 2 — If recommendation is 🚗 driving or 🚕 taxi:**",
+      "After smart_trip returns, call `maps_route(origin, destination, city, arrival_time?)` to get the detailed driving route.",
+      ...(hasNavImage
+        ? [
+            "Then call `maps_navigation_image(origin, destination, city)` to generate the map image.",
+            "The tool returns `image_path`. You MUST write `MEDIA:<image_path>` on the very FIRST line of your reply (a single line with nothing else), then the formatted text below it.",
+          ]
+        : []),
+      "",
+      "**STEP 3 — If recommendation is 🚇 transit or 🚶 walking:**",
+      "No map needed. Write the structured text directly.",
+      "",
+      "**MANDATORY OUTPUT FORMAT — 5 sections, all required, no exceptions:**",
+      "```",
+      "🧠 **智能推荐**",
+      "推荐 [出行方式]（综合评分X分）",
+      "理由：• 理由1 • 理由2 • 理由3",
+      "",
+      "🚌/🚗 **推荐方案详情**",
+      "详细描述：耗时、费用、路线/换乘步骤、步行距离",
+      "",
+      "📊 **全方案对比**",
+      "1. 🚕 打车（评分X分）：XX分钟，约¥XX，适合…",
+      "2. 🚗 自驾（评分X分）：XX分钟，油费+停车≈¥XX，…",
+      "3. 🚇 公交/地铁（评分X分）：XX分钟，¥X，换乘X次…",
+      "",
+      "🌤️ **天气提示**",
+      "当前：XX°C，XX天气。对出行影响：…",
+      "",
+      "⏰ **出发建议**",
+      "建议 [HH:MM] 出发，提前X分钟；注意事项…",
+      "```",
+      "",
+      "STRICT RULES:",
+      "- NEVER invent or guess route details — all data must come from real tool calls.",
+      "- NEVER mention tool names (smart_trip, maps_route, etc.) in your reply.",
+      "- If smart_trip returns `suggested_departure_time`, MUST use it in ⏰ section.",
+      "- All 5 sections are mandatory — never skip or merge them.",
+      "",
+    ];
+  }
+
+  // 旧流程（没有 smart_trip 时降级）
+  return [
+    "## Proactive Planning (Travel / Appointments)",
+    "When a user mentions going somewhere at a specific time, do NOT reply immediately — call tools first to gather real data, then give one comprehensive response.",
+    "Steps to follow IN ORDER:",
+    ...(params.availableTools.has("maps_search")
+      ? [
+          "1. If destination may have multiple branches: call maps_search first to confirm exact address.",
+        ]
+      : []),
+    ...(params.availableTools.has("maps_route")
+      ? [
+          "2. call maps_route(origin, destination, city, arrival_time?) → use traffic_status and suggested_departure_time.",
+        ]
+      : []),
+    ...(hasNavImage
+      ? [
+          "3. call maps_navigation_image(origin, destination, city). Write `MEDIA:<image_path>` on the first line of your reply.",
+        ]
+      : []),
+    "STRICT RULES: never invent route details; never mention internal tool names in replies.",
+    "",
+  ];
+}
+
 function buildReplyTagsSection(isMinimal: boolean) {
   if (isMinimal) {
     return [];
@@ -247,6 +341,13 @@ export function buildAgentSystemPrompt(params: {
     process: "Manage background exec sessions",
     web_search: "Search the web (Brave API)",
     web_fetch: "Fetch and extract readable content from a URL",
+    get_weather:
+      "Get current weather and multi-day forecast for any city (supports Chinese city names)",
+    send_email: "Send an email to a recipient using SMTP",
+    maps_search:
+      "Search for places, parking lots, hospitals, and other POIs using Gaode Maps (高德地图). Use for finding nearby locations.",
+    maps_route:
+      "Get driving directions and estimated travel time between two addresses using Gaode Maps (高德地图). Use when user needs to travel somewhere.",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",
@@ -281,6 +382,10 @@ export function buildAgentSystemPrompt(params: {
     "process",
     "web_search",
     "web_fetch",
+    "get_weather",
+    "send_email",
+    "maps_search",
+    "maps_route",
     "browser",
     "canvas",
     "nodes",
@@ -464,6 +569,7 @@ export function buildAgentSystemPrompt(params: {
     "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     "",
     ...safetySection,
+    ...buildProactivePlanningSection({ availableTools, isMinimal }),
     "## OpenClaw CLI Quick Reference",
     "OpenClaw is controlled via subcommands. Do not invent commands.",
     "To manage the Gateway daemon service (start/stop/restart):",

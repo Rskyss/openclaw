@@ -19,12 +19,47 @@ type ImageBlock = {
   alt?: string;
 };
 
+// 匹配 MEDIA: 标记，用于从文本中提取本地媒体文件路径
+const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n`]+)`?/gi;
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
+
+function getFileExtension(filePath: string): string {
+  const dot = filePath.lastIndexOf(".");
+  return dot >= 0 ? filePath.slice(dot).toLowerCase() : "";
+}
+
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
   const images: ImageBlock[] = [];
 
-  if (Array.isArray(content)) {
+  const extractFromText = (text: string) => {
+    const matches = Array.from(text.matchAll(MEDIA_TOKEN_RE));
+    for (const match of matches) {
+      const raw = (match[1] ?? "")
+        .trim()
+        .replace(/^[`"']+/, "")
+        .replace(/[`"']+$/, "");
+      if (!raw) {
+        continue;
+      }
+      const ext = getFileExtension(raw);
+      if (!IMAGE_EXTENSIONS.has(ext)) {
+        continue;
+      }
+      // HTTP(S) URL 直接使用
+      if (/^https?:\/\//i.test(raw)) {
+        images.push({ url: raw });
+      } else {
+        // 本地路径通过 gateway 的 /media 端点提供服务
+        images.push({ url: `/media?file=${encodeURIComponent(raw)}` });
+      }
+    }
+  };
+
+  if (typeof content === "string") {
+    extractFromText(content);
+  } else if (Array.isArray(content)) {
     for (const block of content) {
       if (typeof block !== "object" || block === null) {
         continue;
@@ -48,6 +83,14 @@ function extractImages(message: unknown): ImageBlock[] {
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
           images.push({ url: imageUrl.url });
+        }
+      } else if (b.type === "text" && typeof b.text === "string") {
+        extractFromText(b.text);
+      } else if (b.type === "tool_result" || b.type === "toolresult") {
+        const t =
+          typeof b.text === "string" ? b.text : typeof b.content === "string" ? b.content : "";
+        if (t) {
+          extractFromText(t);
         }
       }
     }
