@@ -1,0 +1,78 @@
+src/agents/anthropic-payload-log.test.ts(32,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/anthropic-payload-log.ts(148,46): error TS2554: Expected 1 arguments, but got 2.
+src/agents/anthropic-payload-log.ts(152,9): error TS2322: Type '(payload: unknown, payloadModel: Parameters<StreamFn>[0]) => void | undefined' is not assignable to type '(payload: unknown) => void'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/agents/auth-profiles/oauth.ts(1,54): error TS2307: Cannot find module '@mariozechner/pi-ai/oauth' or its corresponding type declarations.
+src/agents/auth-profiles/oauth.ts(2,51): error TS2307: Cannot find module '@mariozechner/pi-ai/oauth' or its corresponding type declarations.
+src/agents/auth-profiles/oauth.ts(18,69): error TS7006: Parameter 'provider' implicitly has an 'any' type.
+src/agents/openai-ws-stream.ts(607,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.live.test.ts(132,9): error TS2322: Type '(payload: any, streamModel: any) => void' is not assignable to type '(payload: unknown) => void'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/agents/pi-embedded-runner-extraparams.live.test.ts(132,21): error TS7006: Parameter 'payload' implicitly has an 'any' type.
+src/agents/pi-embedded-runner-extraparams.live.test.ts(132,30): error TS7006: Parameter 'streamModel' implicitly has an 'any' type.
+src/agents/pi-embedded-runner-extraparams.test.ts(211,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(236,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(279,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(311,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(335,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(360,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(384,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(591,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(622,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(653,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(677,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(702,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(752,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(796,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(835,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(899,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner-extraparams.test.ts(946,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/anthropic-stream-wrappers.ts(280,7): error TS2322: Type '(payload: any, payloadModel: any) => void | undefined' is not assignable to type '(payload: unknown) => void'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/agents/pi-embedded-runner/anthropic-stream-wrappers.ts(280,19): error TS7006: Parameter 'payload' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/anthropic-stream-wrappers.ts(280,28): error TS7006: Parameter 'payloadModel' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/anthropic-stream-wrappers.ts(301,45): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/extra-params.kilocode.test.ts(22,30): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/extra-params.kilocode.test.ts(100,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/extra-params.kilocode.test.ts(128,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/extra-params.kilocode.test.ts(161,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/extra-params.openrouter-cache-control.test.ts(16,35): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/extra-params.zai-tool-stream.test.ts(25,35): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/moonshot-stream-wrappers.ts(56,7): error TS2322: Type '(payload: any, payloadModel: any) => void | undefined' is not assignable to type '(payload: unknown) => void'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/agents/pi-embedded-runner/moonshot-stream-wrappers.ts(56,19): error TS7006: Parameter 'payload' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/moonshot-stream-wrappers.ts(56,28): error TS7006: Parameter 'payloadModel' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/moonshot-stream-wrappers.ts(63,45): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/moonshot-stream-wrappers.ts(92,7): error TS2322: Type '(payload: any, payloadModel: any) => void | undefined' is not assignable to type '(payload: unknown) => void'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/agents/pi-embedded-runner/moonshot-stream-wrappers.ts(92,19): error TS7006: Parameter 'payload' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/moonshot-stream-wrappers.ts(92,28): error TS7006: Parameter 'payloadModel' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/moonshot-stream-wrappers.ts(109,45): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/openai-stream-wrappers.ts(190,7): error TS2322: Type '(payload: any, payloadModel: any) => void | undefined' is not assignable to type '(payload: unknown) => void'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/agents/pi-embedded-runner/openai-stream-wrappers.ts(190,19): error TS7006: Parameter 'payload' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/openai-stream-wrappers.ts(190,28): error TS7006: Parameter 'payloadModel' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/openai-stream-wrappers.ts(200,45): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/openai-stream-wrappers.ts(222,7): error TS2322: Type '(payload: any, payloadModel: any) => void | undefined' is not assignable to type '(payload: unknown) => void'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/agents/pi-embedded-runner/openai-stream-wrappers.ts(222,19): error TS7006: Parameter 'payload' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/openai-stream-wrappers.ts(222,28): error TS7006: Parameter 'payloadModel' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/openai-stream-wrappers.ts(229,45): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(76,7): error TS2322: Type '(payload: any, payloadModel: any) => void | undefined' is not assignable to type '(payload: unknown) => void'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(76,19): error TS7006: Parameter 'payload' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(76,28): error TS7006: Parameter 'payloadModel' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(95,45): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(114,7): error TS2322: Type '(payload: any, payloadModel: any) => void | undefined' is not assignable to type '(payload: unknown) => void'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(114,19): error TS7006: Parameter 'payload' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(114,28): error TS7006: Parameter 'payloadModel' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(116,37): error TS2554: Expected 1 arguments, but got 2.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(139,7): error TS2322: Type '(payload: any, payloadModel: any) => void | undefined' is not assignable to type '(payload: unknown) => void'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(139,19): error TS7006: Parameter 'payload' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(139,28): error TS7006: Parameter 'payloadModel' implicitly has an 'any' type.
+src/agents/pi-embedded-runner/proxy-stream-wrappers.ts(141,37): error TS2554: Expected 1 arguments, but got 2.
+src/commands/openai-codex-oauth.ts(1,39): error TS2307: Cannot find module '@mariozechner/pi-ai/oauth' or its corresponding type declarations.
+src/commands/openai-codex-oauth.ts(2,34): error TS2307: Cannot find module '@mariozechner/pi-ai/oauth' or its corresponding type declarations.
+src/gateway/tools-invoke-http.ts(256,5): error TS2353: Object literal may only specify known properties, and 'allowMediaInvokeCommands' does not exist in type '{ sandboxBrowserBridgeUrl?: string | undefined; allowHostBrowserControl?: boolean | undefined; agentSessionKey?: string | undefined; agentChannel?: GatewayMessageChannel | undefined; ... 25 more ...; sessionId?: string | undefined; }'.

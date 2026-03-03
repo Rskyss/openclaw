@@ -2,6 +2,18 @@ import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inb
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { stripThinkingTags } from "../format.ts";
 
+// 匹配文本中的 MEDIA: 标记（可能出现在行内任意位置），移除标记部分
+const MEDIA_INLINE_RE = /\bMEDIA:\s*`?[^\n`]+`?/gi;
+
+function stripMediaLines(text: string): string {
+  return text
+    .replace(MEDIA_INLINE_RE, "")
+    .replace(/^[ \t]*[：:]\s*$/gm, "") // 移除只剩标点的行（如 "导航地图：" 后面的 MEDIA 被去掉）
+    .replace(/[ \t]{2,}/g, " ") // 压缩连续空格
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 

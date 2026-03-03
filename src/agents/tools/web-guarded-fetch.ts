@@ -40,6 +40,7 @@ export async function fetchWithWebToolsNetworkGuard(
   const { timeoutSeconds, useEnvProxy, ...rest } = params;
   const resolved = {
     ...rest,
+    policy: rest.policy ?? WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
     timeoutMs: resolveTimeoutMs({ timeoutMs: rest.timeoutMs, timeoutSeconds }),
   };
   return fetchWithSsrFGuard(

@@ -146,11 +146,18 @@ function coerceArgs(value: unknown): unknown {
 }
 
 function extractToolText(item: Record<string, unknown>): string | undefined {
+  let text: string | undefined = undefined;
   if (typeof item.text === "string") {
-    return item.text;
+    text = item.text;
+  } else if (typeof item.content === "string") {
+    text = item.content;
   }
-  if (typeof item.content === "string") {
-    return item.content;
+
+  if (text) {
+    // Strip raw MEDIA lines before showing in the tool card format
+    text = text.replace(/\bMEDIA:\s*`?[^\n`]+`?/gi, "").replace(/^[ \t]*[：:]\s*$/gm, "");
+    // Remove newlines left behind
+    text = text.replace(/^\s*\n/gm, "");
   }
-  return undefined;
+  return text;
 }

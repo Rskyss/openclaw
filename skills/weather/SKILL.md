@@ -1,112 +1,83 @@
 ---
 name: weather
-description: "Get current weather and forecasts via wttr.in or Open-Meteo. Use when: user asks about weather, temperature, or forecasts for any location. NOT for: historical weather data, severe weather alerts, or detailed meteorological analysis. No API key needed."
-homepage: https://wttr.in/:help
+description: "Get current weather and forecasts via Open-Meteo. Use when: user asks about weather, temperature, or forecasts for any location. NOT for: historical weather data, severe weather alerts, or detailed meteorological analysis. No API key needed."
+homepage: https://open-meteo.com
 metadata: { "openclaw": { "emoji": "🌤️", "requires": { "bins": ["curl"] } } }
 ---
 
 # Weather Skill
 
-Get current weather conditions and forecasts.
+Get current weather and forecasts using Open-Meteo. **No API key needed. Supports any city worldwide.**
 
-## When to Use
+## IMPORTANT: Use exec tool to run these curl commands. Do NOT use web_fetch or web_search.
 
-✅ **USE this skill when:**
+---
 
-- "What's the weather?"
-- "Will it rain today/tomorrow?"
-- "Temperature in [city]"
-- "Weather forecast for the week"
-- Travel planning weather checks
+## Step 1: Get coordinates for any city (no proxy needed)
 
-## When NOT to Use
-
-❌ **DON'T use this skill when:**
-
-- Historical weather data → use weather archives/APIs
-- Climate analysis or trends → use specialized data sources
-- Hyper-local microclimate data → use local sensors
-- Severe weather alerts → check official NWS sources
-- Aviation/marine weather → use specialized services (METAR, etc.)
-
-## Location
-
-Always include a city, region, or airport code in weather queries.
-
-## Commands
-
-### Current Weather
+Use `--data-urlencode` to handle Chinese city names correctly:
 
 ```bash
-# One-line summary
-curl "wttr.in/London?format=3"
-
-# Detailed current conditions
-curl "wttr.in/London?0"
-
-# Specific city
-curl "wttr.in/New+York?format=3"
+curl -s --max-time 8 -G "https://geocoding-api.open-meteo.com/v1/search" \
+  --data-urlencode "name=城市名" \
+  -d "count=1&language=zh&format=json"
 ```
 
-### Forecasts
+Examples:
 
 ```bash
-# 3-day forecast
-curl "wttr.in/London"
+# 怀化
+curl -s --max-time 8 -G "https://geocoding-api.open-meteo.com/v1/search" \
+  --data-urlencode "name=怀化" -d "count=1&language=zh&format=json"
 
-# Week forecast
-curl "wttr.in/London?format=v2"
-
-# Specific day (0=today, 1=tomorrow, 2=day after)
-curl "wttr.in/London?1"
+# 三亚
+curl -s --max-time 8 -G "https://geocoding-api.open-meteo.com/v1/search" \
+  --data-urlencode "name=三亚" -d "count=1&language=zh&format=json"
 ```
 
-### Format Options
+Response: `{"results":[{"name":"怀化市","latitude":27.56,"longitude":110.00,"timezone":"Asia/Shanghai"}]}`
+
+**If `results` is empty**, retry with pinyin/English name (e.g., 厦门 → Xiamen, 成都 → Chengdu).
+
+---
+
+## Step 2: Get weather with coordinates (proxy required)
 
 ```bash
-# One-liner
-curl "wttr.in/London?format=%l:+%c+%t+%w"
-
-# JSON output
-curl "wttr.in/London?format=j1"
-
-# PNG image
-curl "wttr.in/London.png"
+curl -s --max-time 10 -x http://127.0.0.1:8118 \
+  "https://api.open-meteo.com/v1/forecast?latitude=LAT&longitude=LON&current_weather=true&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode&timezone=Asia%2FShanghai&forecast_days=7"
 ```
 
-### Format Codes
-
-- `%c` — Weather condition emoji
-- `%t` — Temperature
-- `%f` — "Feels like"
-- `%w` — Wind
-- `%h` — Humidity
-- `%p` — Precipitation
-- `%l` — Location
-
-## Quick Responses
-
-**"What's the weather?"**
+Example for 怀化 (lat=27.56, lon=110.00):
 
 ```bash
-curl -s "wttr.in/London?format=%l:+%c+%t+(feels+like+%f),+%w+wind,+%h+humidity"
+curl -s --max-time 10 -x http://127.0.0.1:8118 \
+  "https://api.open-meteo.com/v1/forecast?latitude=27.56&longitude=110.00&current_weather=true&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode&timezone=Asia%2FShanghai&forecast_days=7"
 ```
 
-**"Will it rain?"**
+---
 
-```bash
-curl -s "wttr.in/London?format=%l:+%c+%p"
+## WMO Weather Code Reference
+
+| Code  | Weather      |
+| ----- | ------------ |
+| 0     | 晴天 ☀️      |
+| 1-3   | 少云/多云 ⛅ |
+| 45,48 | 雾 🌫️        |
+| 51-57 | 毛毛雨 🌦️    |
+| 61-67 | 雨 🌧️        |
+| 71-77 | 雪 ❄️        |
+| 80-82 | 阵雨 🌦️      |
+| 95-99 | 雷暴 ⛈️      |
+
+---
+
+## Quick Response Format
+
 ```
-
-**"Weekend forecast"**
-
-```bash
-curl "wttr.in/London?format=v2"
+📍 [城市] 天气报告
+🌡️ 当前: X°C，[天气描述]
+💨 风速: X km/h
+📅 今天: X-X°C，降水 Xmm
+📅 明天: X-X°C，[天气描述]
 ```
-
-## Notes
-
-- No API key needed (uses wttr.in)
-- Rate limited; don't spam requests
-- Works for most global cities
-- Supports airport codes: `curl wttr.in/ORD`

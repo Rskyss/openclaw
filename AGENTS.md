@@ -1,14 +1,34 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Repository Guidelines
 
 - Repo: https://github.com/openclaw/openclaw
 - In chat replies, file references must be repo-root relative only (example: `extensions/bluebubbles/src/channel.ts:80`); never absolute paths or `~/...`.
-- GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
-- GitHub comment footgun: never use `gh issue/pr comment -b "..."` when body contains backticks or shell chars. Always use single-quoted heredoc (`-F - <<'EOF'`) so no command substitution/escaping corruption.
+- GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<’EOF’` (or $’...’) for real newlines; never embed "\\n".
+- GitHub comment footgun: never use `gh issue/pr comment -b "..."` when body contains backticks or shell chars. Always use single-quoted heredoc (`-F - <<’EOF’`) so no command substitution/escaping corruption.
 - GitHub linking footgun: don’t wrap issue/PR refs like `#24643` in backticks when you want auto-linking. Use plain `#24643` (optionally add full URL).
-- PR landing comments: always make commit SHAs clickable with full commit links (both landed SHA + source SHA when present).
-- PR review conversations: if a bot leaves review conversations on your PR, address them and resolve those conversations yourself once fixed. Leave a conversation unresolved only when reviewer or maintainer judgment is still needed; do not leave bot-conversation cleanup to maintainers.
-- GitHub searching footgun: don't limit yourself to the first 500 issues or PRs when wanting to search all. Unless you're supposed to look at the most recent, keep going until you've reached the last page in the search
-- Security advisory analysis: before triage/severity decisions, read `SECURITY.md` to align with OpenClaw's trust model and design boundaries.
+
+- Security advisory analysis: before triage/severity decisions, read `SECURITY.md` to align with OpenClaw’s trust model and design boundaries.
+
+## Architecture Overview
+
+OpenClaw is a multi-channel AI gateway that runs on the user’s own device. Users interact with AI through everyday messaging channels (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Microsoft Teams, etc.).
+
+**Message flow:** External channel → Channel adapter → auto-reply/dispatch (`src/auto-reply/`) → Agent Runner via ACP runtime (`src/acp/`, `src/agents/`) → AI model provider (`src/providers/`) → reply sent back through the channel adapter.
+
+**Key modules:**
+
+- **Gateway** (`src/gateway/`): WebSocket/HTTP control plane; runs as macOS menubar app or standalone server.
+- **Channels** (`src/channels/`, `src/telegram/`, `src/discord/`, `src/slack/`, `src/signal/`, `src/imessage/`, `src/web/`): Message channel adapters. Extension channels live in `extensions/*`.
+- **Agents** (`src/agents/`, `src/acp/`): AI agent execution engine and Agent Client Protocol runtime.
+- **Routing** (`src/routing/`): Session routing; session key format is `{channel}:{accountId}:{threadId}`.
+- **Config** (`src/config/`): Zod-schema configuration system with migration support.
+- **Plugin SDK** (`src/plugin-sdk/`): Public API for third-party plugins, loaded at runtime via `jiti`.
+- **DI pattern**: Dependency injection via `createDefaultDeps` throughout CLI and gateway code.
+
+**Workspaces** (pnpm): root (openclaw core), `ui/` (Web UI, Vite+Lit), `packages/*` (moltbot/clawdbot compat shims), `extensions/*` (channel plugins).
 
 ## Auto-close labels (issues and PRs)
 
@@ -90,6 +110,8 @@
 - Format check: `pnpm format` (oxfmt --check)
 - Format fix: `pnpm format:fix` (oxfmt --write)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
+- Run single test file: `pnpm test -- src/path/to/file.test.ts`
+- Run matching tests: `pnpm test -- -t "test name pattern"`
 
 ## Coding Style & Naming Conventions
 
@@ -103,7 +125,7 @@
 - In tests, prefer per-instance stubs over prototype mutation (`SomeClass.prototype.method = ...`) unless a test explicitly documents why prototype-level patching is required.
 - Add brief code comments for tricky or non-obvious logic.
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
-- Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
+- Aim to keep files under ~500 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
 - Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
 
 ## Release Channels (Naming)

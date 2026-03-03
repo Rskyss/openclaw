@@ -52,6 +52,7 @@ import {
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
 import { getBearerToken } from "./http-utils.js";
+import { handleMediaServeRequest } from "./media-serve.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import {
@@ -640,6 +641,11 @@ export function createGatewayHttpServer(opts: {
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
+        },
+        {
+          // Serve local media files (images) for webchat display
+          name: "media-serve",
+          run: () => handleMediaServeRequest(req, res),
         },
         {
           name: "tools-invoke",
