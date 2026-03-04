@@ -121,3 +121,5 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+tools/*/cookies.json
+tools/**/*.json
