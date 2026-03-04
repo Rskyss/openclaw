@@ -457,6 +457,11 @@ export function applyExtraParamsToAgent(
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
 
+  // Volcengine Doubao reasoning_effort support
+  if (provider === "volcengine" && thinkingLevel) {
+    agent.streamFn = createVolcengineReasoningWrapper(agent.streamFn, thinkingLevel);
+  }
+
   const openAIServiceTier = resolveOpenAIServiceTier(merged);
   if (openAIServiceTier) {
     log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);

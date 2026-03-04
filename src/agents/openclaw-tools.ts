@@ -33,6 +33,19 @@ import { createGetWeatherTool } from "./tools/weather-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
+function resolveGeminiKeyForSmartTrip(config?: OpenClawConfig): string | undefined {
+  const search = config?.tools as Record<string, unknown> | undefined;
+  const web = search?.web as Record<string, unknown> | undefined;
+  const searchConfig = web?.search as Record<string, unknown> | undefined;
+  const gemini = searchConfig?.gemini as Record<string, unknown> | undefined;
+  const fromConfig = typeof gemini?.apiKey === "string" ? gemini.apiKey.trim() : "";
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = process.env.GEMINI_API_KEY?.trim();
+  return fromEnv || undefined;
+}
+
 export function createOpenClawTools(
   options?: {
     sandboxBrowserBridgeUrl?: string;
