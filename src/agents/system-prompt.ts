@@ -117,54 +117,53 @@ function buildProactivePlanningSection(params: {
 
   const hasSmartTrip = params.availableTools.has("smart_trip");
   const hasNavImage = params.availableTools.has("maps_navigation_image");
+  const hasBrowser = params.availableTools.has("browser");
+
+  const hasTripPlanner = params.availableTools.has("trip_planner");
 
   if (hasSmartTrip) {
-    // 新智能出行流程
     return [
-      "## Proactive Planning (Travel / Appointments)",
-      "When a user mentions going somewhere, do NOT reply immediately — call tools first, then give one comprehensive structured response.",
+      "## Travel Assistance",
       "",
-      "**STEP 1 — Always call `smart_trip` first:**",
-      "Call `smart_trip(origin, destination, city, arrival_time?)` — it returns multi-mode analysis (driving/transit/walking), parking difficulty, weather, and a scoring recommendation.",
-      "",
-      "**STEP 2 — If recommendation is 🚗 driving or 🚕 taxi:**",
-      "After smart_trip returns, call `maps_route(origin, destination, city, arrival_time?)` to get the detailed driving route.",
+      "Available tools for travel questions:",
+      "- `smart_trip`: all-mode data in parallel (driving/transit/walking/weather/parking/map) — for A→B single-trip questions",
+      "- `event_search`: real-time event info via web search — use when destination has an ongoing event/activity",
+      "- `maps_route`: detailed turn-by-turn driving directions",
       ...(hasNavImage
         ? [
-            "Then call `maps_navigation_image(origin, destination, city)` to generate the map image.",
-            "The tool returns `image_path`. You MUST write `MEDIA:<image_path>` on the very FIRST line of your reply (a single line with nothing else), then the formatted text below it.",
+            "- `maps_navigation_image`: generate a navigation map image (returns image_path — write `MEDIA:<image_path>` on the FIRST line of your reply)",
           ]
         : []),
+      ...(hasTripPlanner
+        ? [
+            "- `trip_planner`: local trip planning — use when user is already at a location and wants:",
+            "  - Nearby recommendations (attractions, food, shopping, entertainment)",
+            "  - Multi-stop itinerary optimization (given multiple places, find the best route order)",
+            "  - Half-day / full-day trip planning with time scheduling",
+            "  - Example triggers: '附近有什么好玩的' '推荐美食' '帮我安排行程' '这几个地方怎么走最顺'",
+          ]
+        : []),
+      "- `web_search`: general web search",
+      ...(hasBrowser
+        ? ["- `browser`: real-time social content (e.g. Weibo) for live on-site updates"]
+        : []),
       "",
-      "**STEP 3 — If recommendation is 🚇 transit or 🚶 walking:**",
-      "No map needed. Write the structured text directly.",
+      "Tool selection guide:",
+      "- '怎么去XX' / 'XX怎么走' / '路况怎样' → `smart_trip` (A→B navigation)",
+      "- '附近有什么好玩/好吃的' / '推荐XX' / '帮我安排行程' → `trip_planner` (local exploration & planning)",
+      "- '想去A、B、C，怎么安排最顺' → `trip_planner` with places parameter (multi-stop optimization)",
       "",
-      "**MANDATORY OUTPUT FORMAT — 5 sections, all required, no exceptions:**",
-      "```",
-      "🧠 **智能推荐**",
-      "推荐 [出行方式]（综合评分X分）",
-      "理由：• 理由1 • 理由2 • 理由3",
-      "",
-      "🚌/🚗 **推荐方案详情**",
-      "详细描述：耗时、费用、路线/换乘步骤、步行距离",
-      "",
-      "📊 **全方案对比**",
-      "1. 🚕 打车（评分X分）：XX分钟，约¥XX，适合…",
-      "2. 🚗 自驾（评分X分）：XX分钟，油费+停车≈¥XX，…",
-      "3. 🚇 公交/地铁（评分X分）：XX分钟，¥X，换乘X次…",
-      "",
-      "🌤️ **天气提示**",
-      "当前：XX°C，XX天气。对出行影响：…",
-      "",
-      "⏰ **出发建议**",
-      "建议 [HH:MM] 出发，提前X分钟；注意事项…",
-      "```",
-      "",
-      "STRICT RULES:",
-      "- NEVER invent or guess route details — all data must come from real tool calls.",
-      "- NEVER mention tool names (smart_trip, maps_route, etc.) in your reply.",
-      "- If smart_trip returns `suggested_departure_time`, MUST use it in ⏰ section.",
-      "- All 5 sections are mandatory — never skip or merge them.",
+      "Principles:",
+      "- **Understand intent first**: '好停车吗？' needs only parking data; '怎么去？' needs a full plan; '附近有什么好玩的' needs recommendations. Match tool calls to what was actually asked.",
+      "- **Call tools in parallel**: gather all needed data simultaneously before composing a reply.",
+      "- **You decide what to highlight**: tools return raw data — you synthesize it intelligently based on the user's context and question.",
+      "- **For follow-up questions**: respond conversationally using data from previous tool calls. Do NOT re-run the full analysis.",
+      "- **For transit recommendations**: always include specific line names, boarding/alighting/transfer stations. Never say just '换乘1次' without details.",
+      "- NEVER invent or guess route details — all data must come from actual tool calls.",
+      "- NEVER mention tool names in your reply. Always use natural Chinese prose.",
+      "- NEVER fabricate real-time data (crowds, traffic, event status, ticket prices). Only state what tool results explicitly contain.",
+      "- NEVER use phrases like '搜索结果提示...' for data you did not actually receive.",
+      "- Time awareness: check current_time from tool results. After 22:00, outdoor/evening events are likely closing — flag this; do NOT say 'now is a great time to go'.",
       "",
     ];
   }
@@ -181,7 +180,7 @@ function buildProactivePlanningSection(params: {
       : []),
     ...(params.availableTools.has("maps_route")
       ? [
-          "2. call maps_route(origin, destination, city, arrival_time?) → use traffic_status and suggested_departure_time.",
+          "2. call maps_route(origin, destination, city, arrival_time?) → use the returned traffic level and suggested departure time.",
         ]
       : []),
     ...(hasNavImage
@@ -189,7 +188,7 @@ function buildProactivePlanningSection(params: {
           "3. call maps_navigation_image(origin, destination, city). Write `MEDIA:<image_path>` on the first line of your reply.",
         ]
       : []),
-    "STRICT RULES: never invent route details; never mention internal tool names in replies.",
+    "STRICT RULES: never invent route details; never mention internal tool names or raw field names (e.g. traffic_status, strategy=avoid_highway) in replies — always use natural Chinese prose.",
     "",
   ];
 }
@@ -567,6 +566,13 @@ export function buildAgentSystemPrompt(params: {
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
     "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+    "",
+    "## Output Hygiene",
+    "NEVER expose internal system details in user-facing replies:",
+    "- Runtime line fields (model=, default_model=, channel=, agent=, node=, etc.) — these are internal metadata, not for users.",
+    "- Raw tool result field names or key=value pairs (e.g. traffic_status=畅通, strategy=avoid_highway).",
+    "- Tool names (smart_trip, maps_route, session_status, etc.).",
+    "Always translate internal data into natural, human-friendly language. When asked about the current model, call session_status to get the info and present it naturally.",
     "",
     ...safetySection,
     ...buildProactivePlanningSection({ availableTools, isMinimal }),

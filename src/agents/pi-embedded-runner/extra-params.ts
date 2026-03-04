@@ -981,8 +981,41 @@ export function applyExtraParamsToAgent(
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
 
+  // Volcengine Doubao reasoning_effort support
+  if (provider === "volcengine" && thinkingLevel) {
+    agent.streamFn = createVolcengineReasoningWrapper(agent.streamFn, thinkingLevel);
+  }
+
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+}
+
+function createVolcengineReasoningWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const onPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (thinkingLevel && payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (thinkingLevel === "off") {
+            payloadObj.reasoning_effort = "minimal";
+          } else if (thinkingLevel === "low") {
+            payloadObj.reasoning_effort = "low";
+          } else if (thinkingLevel === "medium" || thinkingLevel === "adaptive") {
+            payloadObj.reasoning_effort = "medium";
+          } else if (thinkingLevel === "high" || thinkingLevel === "xhigh") {
+            payloadObj.reasoning_effort = "high";
+          }
+        }
+        onPayload?.(payload);
+      },
+    });
+  };
 }

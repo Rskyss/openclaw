@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { logWarn } from "../../logger.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import { jsonResult, readStringParam, readStringArrayParam } from "./common.js";
 
 const AMAP_BASE = "https://restapi.amap.com";
 
@@ -330,24 +330,12 @@ export function createMapsRouteTool(): AnyAgentTool {
   return {
     name: "maps_route",
     label: "Maps Route",
-    description: `⛔【强制前置规则】如果用户是在询问"怎么去某地"、"出行方案"或"路线"等，你必须先调用 smart_trip 工具进行智能出行分析，再根据 smart_trip 的推荐结果决定是否调用本工具。禁止直接调用 maps_route 作为用户出行咨询的第一个工具！
-只有在以下情况才允许直接调用本工具：
-- smart_trip 已执行，且推荐方案为"驾车"或"打车"
-- 用户明确指定了"我要开车去"或"帮我算驾车路线"
+    description: `使用高德地图规划驾车路线，获取预估耗时、主要道路和路况等。
+通常在 smart_trip 分析后、用户需要驾车详情时调用。也可在用户明确要求驾车路线时直接调用。
 
-使用高德地图规划驾车路线，获取预估耗时、主要道路和路况等。
-    
-【系统强制指令 1：必须调用图片生成】
-获取到此处返回的路线信息后，你必须【紧接着调用 maps_navigation_image 工具】！千万不能口头说“地图已生成”，而是必须进行实质性的 tool_call 操作来生成图片！
-
-【系统强制指令 2：必须严格使用官方排版模板】
-绝不可套用你自己的旧回答或胡乱编造（如不要错把儿保认作浙一！请仔细阅读本工具返回的具体距离与地点数据）。
-在你输出的内容中，必须包含并严格遵守以下5个区块的格式（使用加粗、列表和对应的Emoji）：
-1. 🚗 行程概览（写入返回的实际起终点、distance、duration、费用）
-2. ⏰ 出发建议（建议出发时间及理由）
-3. 🚦 路况及预测（必须根据返回的 traffic_status 准确说明，不可遗漏）
-4. 🛣️ 推荐路线（写入返回的 main_roads）
-5. 🅿️ 停车指引（这里请综合你从 maps_navigation_image 里看到的停车场信息，不要瞎编）`,
+获取路线后，紧接着调用 maps_navigation_image 生成导航地图。
+回复时使用返回的真实数据（起终点、距离、耗时、路况、主要道路），不要编造。
+严禁在回复中暴露英文字段名或 key=value 格式，必须用自然中文表达。`,
     parameters: MapsRouteSchema,
     execute: async (_toolCallId, args) => {
       const apiKey = process.env.AMAP_API_KEY;
@@ -487,7 +475,6 @@ export function createMapsRouteTool(): AnyAgentTool {
           distance: fmtDistance(distanceM),
           taxi_cost_estimate: data.route.taxi_cost ? `约${data.route.taxi_cost}元` : undefined,
           main_roads: roads,
-          strategy: strategyInput,
           traffic_status: trafficSummary.level,
           traffic_tip: trafficSummary.tip,
           ...(arrivalTimestampFormatted ? { target_arrival_time: arrivalTimestampFormatted } : {}),
@@ -549,6 +536,12 @@ const MapsNavImageSchema = Type.Object({
   origin: Type.String({ description: "出发地地址，如 '某某小区'" }),
   destination: Type.String({ description: "目的地地址，如 '市中心医院'" }),
   city: Type.Optional(Type.String({ description: "城市名，如 '北京'" })),
+  walking_origin_lng: Type.Optional(
+    Type.String({ description: "步行路线起点经度（用于在地图上叠加绿色步行路线）" }),
+  ),
+  walking_origin_lat: Type.Optional(Type.String({ description: "步行路线起点纬度" })),
+  walking_dest_lng: Type.Optional(Type.String({ description: "步行路线终点经度" })),
+  walking_dest_lat: Type.Optional(Type.String({ description: "步行路线终点纬度" })),
 });
 
 export function createMapsNavImageTool(): AnyAgentTool {
@@ -570,7 +563,6 @@ export function createMapsNavImageTool(): AnyAgentTool {
       const destination = readStringParam(params, "destination", { required: true });
       const city = typeof params.city === "string" ? params.city : undefined;
 
-      // Step 1: 解析起终点坐标
       const originGeo = await geocode(origin, apiKey, city);
       if (!originGeo) {
         return jsonResult({ error: `无法解析出发地"${origin}"的坐标` });
@@ -580,130 +572,216 @@ export function createMapsNavImageTool(): AnyAgentTool {
         return jsonResult({ error: `无法解析目的地"${destination}"的坐标` });
       }
 
-      // Step 2: 获取驾车路线（含 polyline 坐标）
-      type StepItem = { road: string; instruction: string; polyline: string };
-      let routePolyline = "";
+      const wOLng =
+        typeof params.walking_origin_lng === "string" ? params.walking_origin_lng : undefined;
+      const wOLat =
+        typeof params.walking_origin_lat === "string" ? params.walking_origin_lat : undefined;
+      const wDLng =
+        typeof params.walking_dest_lng === "string" ? params.walking_dest_lng : undefined;
+      const wDLat =
+        typeof params.walking_dest_lat === "string" ? params.walking_dest_lat : undefined;
+      const walkingLeg =
+        wOLng && wOLat && wDLng && wDLat
+          ? { originLng: wOLng, originLat: wOLat, destLng: wDLng, destLat: wDLat }
+          : undefined;
+
+      const mapResult = await generateNavMap(originGeo, destGeo, apiKey, walkingLeg);
+      if (!mapResult) {
+        return jsonResult({ error: "地图图片生成失败" });
+      }
+
+      return jsonResult({
+        _SYSTEM_IMAGE_INSTRUCTION: `✅ 导航地图已生成（已缩小为缩略图）。请你先写完所有的出行方案分析文字，然后在回复的【最后一行】放上地图：\n![导航路线图](/media?file=${mapResult.image_path})\n\n注意：地图必须放在全部文字之后，不要放在开头。不要使用 MEDIA 标签，不要使用 HTML 标签。`,
+        ...mapResult,
+      });
+    },
+  };
+}
+
+// ─── 内部辅助函数：生成导航地图 ────────────────────────────────────────────────
+
+interface NavMapResult {
+  image_path: string;
+  parking_info: string;
+  parking_names: string[];
+  map_description: string;
+}
+
+async function generateNavMap(
+  originGeo: { lng: string; lat: string },
+  destGeo: { lng: string; lat: string },
+  apiKey: string,
+  walkingLeg?: { originLng: string; originLat: string; destLng: string; destLat: string },
+): Promise<NavMapResult | null> {
+  try {
+    type StepItem = { polyline: string };
+
+    // 获取驾车路线 polyline（蓝色）
+    let routePolyline = "";
+    try {
+      const driveData = (await amapGet("/v3/direction/driving", {
+        origin: `${originGeo.lng},${originGeo.lat}`,
+        destination: `${destGeo.lng},${destGeo.lat}`,
+        key: apiKey,
+        extensions: "all",
+        strategy: "0",
+        output: "json",
+      })) as {
+        status: string;
+        route?: { paths: Array<{ steps: StepItem[] }> };
+      };
+      if (driveData.status === "1" && driveData.route?.paths?.[0]) {
+        routePolyline = driveData.route.paths[0].steps
+          .map((s) => s.polyline)
+          .filter(Boolean)
+          .join(";");
+      }
+    } catch {
+      // 路线获取失败不阻塞
+    }
+
+    // 获取步行路线 polyline（绿色），仅在 walkingLeg 传入时请求
+    let walkingPolyline = "";
+    if (walkingLeg) {
       try {
-        const driveData = (await amapGet("/v3/direction/driving", {
-          origin: `${originGeo.lng},${originGeo.lat}`,
-          destination: `${destGeo.lng},${destGeo.lat}`,
+        const walkData = (await amapGet("/v3/direction/walking", {
+          origin: `${walkingLeg.originLng},${walkingLeg.originLat}`,
+          destination: `${walkingLeg.destLng},${walkingLeg.destLat}`,
           key: apiKey,
-          extensions: "all",
-          strategy: "0",
           output: "json",
         })) as {
           status: string;
-          route?: { paths: Array<{ steps: StepItem[] }> };
+          route?: { paths?: Array<{ steps: StepItem[] }> };
         };
-        if (driveData.status === "1" && driveData.route?.paths?.[0]) {
-          // 把所有 step 的 polyline 拼起来
-          routePolyline = driveData.route.paths[0].steps
+        if (walkData.status === "1" && walkData.route?.paths?.[0]) {
+          walkingPolyline = walkData.route.paths[0].steps
             .map((s) => s.polyline)
             .filter(Boolean)
             .join(";");
         }
       } catch {
-        // 路线获取失败不阻塞，地图上只显示标注点
+        // 步行路线获取失败不阻塞
       }
+    }
 
-      // Step 3: 搜索目的地附近停车场
-      type PoiItem = { name: string; location: string; address: string };
-      let parkingSpots: PoiItem[] = [];
-      try {
-        const searchData = (await amapGet("/v3/place/around", {
-          location: `${destGeo.lng},${destGeo.lat}`,
-          keywords: "停车场",
-          radius: "500",
-          key: apiKey,
-          output: "json",
-          offset: "3",
-          sortrule: "0", // 0 表示按距离排序，防止返回远处高权重的商场停车场
-        })) as { status: string; pois?: PoiItem[] };
-        if (searchData.status === "1" && searchData.pois?.length) {
-          parkingSpots = searchData.pois.slice(0, 3);
-        }
-      } catch {
-        // 停车场搜索失败不阻塞
+    // 搜索目的地附近停车场
+    type PoiItem = { name: string; location: string; address: string };
+    let parkingSpots: PoiItem[] = [];
+    try {
+      const searchData = (await amapGet("/v3/place/around", {
+        location: `${destGeo.lng},${destGeo.lat}`,
+        keywords: "停车场",
+        radius: "500",
+        key: apiKey,
+        output: "json",
+        offset: "3",
+        sortrule: "0",
+      })) as { status: string; pois?: PoiItem[] };
+      if (searchData.status === "1" && searchData.pois?.length) {
+        parkingSpots = searchData.pois.slice(0, 3);
       }
+    } catch {
+      // 停车场搜索失败不阻塞
+    }
 
-      // Step 4: 拼接高德静态地图 URL
-      // markers: 起点=绿色(起), 终点=红色(终), 停车场=蓝色(P)
-      const markers: string[] = [];
-      markers.push(`large,0x00CC00,起:${originGeo.lng},${originGeo.lat}`);
-      markers.push(`large,0xFF0000,终:${destGeo.lng},${destGeo.lat}`);
-      for (const p of parkingSpots) {
-        markers.push(`mid,0x0000FF,P:${p.location}`);
-      }
+    // 拼接高德静态地图 URL
+    const markers: string[] = [];
+    markers.push(`large,0x00CC00,起:${originGeo.lng},${originGeo.lat}`);
+    markers.push(`large,0xFF0000,终:${destGeo.lng},${destGeo.lat}`);
+    for (const p of parkingSpots) {
+      markers.push(`mid,0x0000FF,P:${p.location}`);
+    }
 
-      const staticUrl = new URL(`${AMAP_BASE}/v3/staticmap`);
-      staticUrl.searchParams.set("key", apiKey);
-      staticUrl.searchParams.set("size", "800*600");
-      staticUrl.searchParams.set("scale", "2"); // 高清
-      staticUrl.searchParams.set("markers", markers.join("|"));
+    const staticUrl = new URL(`${AMAP_BASE}/v3/staticmap`);
+    staticUrl.searchParams.set("key", apiKey);
+    staticUrl.searchParams.set("size", "800*600");
+    staticUrl.searchParams.set("scale", "2");
+    staticUrl.searchParams.set("markers", markers.join("|"));
 
-      // 添加路线 path（蓝色线）
-      if (routePolyline) {
-        // 高德 polyline 格式: lng,lat;lng,lat — 静态地图的 paths 也用这个格式
-        // 如果坐标点太多（>200），需要抽稀以免 URL 过长
-        let points = routePolyline.split(";");
-        if (points.length > 200) {
-          // 等间距抽稀到 200 个点
-          const step = Math.ceil(points.length / 200);
-          const sampled: string[] = [];
-          for (let i = 0; i < points.length; i += step) {
-            const pt = points[i];
-            if (pt) {
-              sampled.push(pt);
-            }
+    if (routePolyline) {
+      let points = routePolyline.split(";");
+      if (points.length > 200) {
+        const step = Math.ceil(points.length / 200);
+        const sampled: string[] = [];
+        for (let i = 0; i < points.length; i += step) {
+          const pt = points[i];
+          if (pt) {
+            sampled.push(pt);
           }
-          // 确保最后一个点
-          const lastPt = points[points.length - 1];
-          if (lastPt && sampled[sampled.length - 1] !== lastPt) {
-            sampled.push(lastPt);
+        }
+        const lastPt = points[points.length - 1];
+        if (lastPt && sampled[sampled.length - 1] !== lastPt) {
+          sampled.push(lastPt);
+        }
+        points = sampled;
+      }
+      staticUrl.searchParams.set("paths", `6,0x0088FF,1,,:${points.join(";")}`);
+    }
+
+    // 步行路线叠加（绿色线）
+    if (walkingPolyline) {
+      let wPoints = walkingPolyline.split(";");
+      if (wPoints.length > 200) {
+        const step = Math.ceil(wPoints.length / 200);
+        const sampled: string[] = [];
+        for (let i = 0; i < wPoints.length; i += step) {
+          const pt = wPoints[i];
+          if (pt) {
+            sampled.push(pt);
           }
-          points = sampled;
         }
-        const pathStr = `6,0x0088FF,1,,:${points.join(";")}`;
-        staticUrl.searchParams.set("paths", pathStr);
-      }
-
-      // Step 5: 下载图片并保存到临时文件
-      try {
-        const imgRes = await fetch(staticUrl.toString());
-        if (!imgRes.ok) {
-          return jsonResult({ error: `静态地图生成失败: HTTP ${imgRes.status}` });
+        const lastPt = wPoints[wPoints.length - 1];
+        if (lastPt && sampled[sampled.length - 1] !== lastPt) {
+          sampled.push(lastPt);
         }
-        const imgBuf = Buffer.from(await imgRes.arrayBuffer());
-
-        // 保存到 OpenClaw 临时目录（系统安全策略要求路径在 /tmp/openclaw/ 下）
-        const fs = await import("node:fs/promises");
-        const tmpDir = "/tmp/openclaw";
-        await fs.mkdir(tmpDir, { recursive: true });
-        const tmpPath = `${tmpDir}/nav-map-${Date.now()}.png`;
-        await fs.writeFile(tmpPath, imgBuf);
-
-        // 构建停车场说明文本
-        const parkingDesc = parkingSpots.length
-          ? parkingSpots
-              .map((p, i) => `${i + 1}. ${p.name}（${p.address || "详见地图蓝色P标注"}）`)
-              .join("\n")
-          : "未找到附近停车场";
-
-        // ⚠️ 不在工具结果里放 MEDIA:，而是把路径给 AI，让 AI 在文字回复里嵌入
-        return jsonResult({
-          _SYSTEM_IMAGE_INSTRUCTION: `✅ 导航地图已生成。你现在必须把以下 MEDIA 路径写在你最终文字回复的【第一行】，格式严格如下（不要加引号、不要加任何前后文字，单独一行）：\nMEDIA:${tmpPath}\n\n写完 MEDIA 行之后，在新的一段继续写你的出行分析文字即可。`,
-          image_path: tmpPath,
-          parking_info: parkingDesc,
-          parking_names: parkingSpots.map((p) => p.name),
-          map_description:
-            "图中绿色标注为出发地，红色标注为目的地，蓝色P标注为附近停车场，蓝色线为推荐驾车路线。",
-        });
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        return jsonResult({ error: `地图图片下载失败: ${message}` });
+        wPoints = sampled;
       }
-    },
-  };
+      staticUrl.searchParams.append("paths", `5,0x00BB44,1,,:${wPoints.join(";")}`);
+    }
+
+    // 下载图片
+    const imgRes = await fetch(staticUrl.toString());
+    if (!imgRes.ok) {
+      return null;
+    }
+    const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+
+    const fs = await import("node:fs/promises");
+    const tmpDir = "/tmp/openclaw";
+    await fs.mkdir(tmpDir, { recursive: true });
+    const tmpPath = `${tmpDir}/nav-map-${Date.now()}.png`;
+    // 使用 sharp 缩小为 500px 宽的缩略图
+    try {
+      const sharp = (await import("sharp")).default;
+      const resized = await sharp(imgBuf).resize({ width: 350 }).png({ quality: 80 }).toBuffer();
+      await fs.writeFile(tmpPath, resized);
+    } catch {
+      // sharp 失败时保留原图
+      await fs.writeFile(tmpPath, imgBuf);
+    }
+
+    const parkingDesc = parkingSpots.length
+      ? parkingSpots
+          .map((p, i) => `${i + 1}. ${p.name}（${p.address || "详见地图蓝色P标注"}）`)
+          .join("\n")
+      : "未找到附近停车场";
+
+    const mapDesc = [
+      "图中绿色标注为出发地，红色标注为目的地，蓝色P标注为附近停车场",
+      routePolyline ? "，蓝色线为推荐驾车路线" : "",
+      walkingPolyline ? "，绿色线为步行路线" : "",
+      "。",
+    ].join("");
+
+    return {
+      image_path: tmpPath,
+      parking_info: parkingDesc,
+      parking_names: parkingSpots.map((p) => p.name),
+      map_description: mapDesc,
+    };
+  } catch {
+    return null;
+  }
 }
 
 // ─── 内部辅助函数：公交地铁换乘路线 ──────────────────────────────────────────
@@ -771,7 +849,12 @@ async function transitRoute(
       if (seg.bus?.buslines?.length) {
         const line = seg.bus.buslines[0];
         if (line) {
-          segments.push(`${line.name}（${line.via_num || "?"}站）`);
+          const from = line.departure_stop?.name ?? "";
+          const to = line.arrival_stop?.name ?? "";
+          const stops = line.via_num || "?";
+          const stationInfo =
+            from && to ? `（${from}上车 → ${to}下车，${stops}站）` : `（${stops}站）`;
+          segments.push(`${line.name}${stationInfo}`);
           transfers++;
         }
       } else if (seg.railway) {
@@ -898,281 +981,152 @@ async function getAmapWeather(city: string, apiKey: string): Promise<WeatherResu
   }
 }
 
-// ─── 内部辅助函数：停车难度评估 ──────────────────────────────────────────────
+// ─── 内部辅助函数：小红书实时情报搜索 ──────────────────────────────────────────
 
-interface ParkingAssessment {
-  parkingCount: number;
-  difficulty: "easy" | "medium" | "hard";
-  estimatedCostPerHour: number;
-  parkingNames: string[];
+interface XhsSearchResult {
+  title: string;
+  likes: string;
+  comments: string;
+  cover_url: string;
 }
 
-async function assessParking(
-  lng: string,
-  lat: string,
-  poiType: string,
-  apiKey: string,
-): Promise<ParkingAssessment> {
-  let parkingCount = 0;
-  const parkingNames: string[] = [];
+const XHS_MCP_URL = "http://127.0.0.1:18060/mcp";
+const XHS_TIMEOUT_MS = 15000;
+
+async function searchXiaohongshu(
+  destination: string,
+  rawKeyword?: string,
+): Promise<XhsSearchResult[] | null> {
   try {
-    const data = (await amapGet("/v3/place/around", {
-      location: `${lng},${lat}`,
-      keywords: "停车场",
-      radius: "500",
-      key: apiKey,
-      output: "json",
-      offset: "10",
-      sortrule: "0",
-    })) as { status: string; pois?: Array<{ name: string }> };
-    if (data.status === "1" && data.pois) {
-      parkingCount = data.pois.length;
-      for (const p of data.pois.slice(0, 3)) {
-        parkingNames.push(p.name);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), XHS_TIMEOUT_MS);
+
+    try {
+      // 1. 初始化 MCP 会话
+      const initRes = await fetch(XHS_MCP_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "smart-trip", version: "1.0" },
+          },
+          id: 1,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!initRes.ok) {
+        return null;
       }
+      const sessionId = initRes.headers.get("mcp-session-id");
+      if (!sessionId) {
+        return null;
+      }
+
+      // 2. 搜索小红书（rawKeyword 为直接搜索，否则拼接出行相关关键词）
+      const keyword = rawKeyword || `${destination} 攻略 停车`;
+      const searchRes = await fetch(XHS_MCP_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Mcp-Session-Id": sessionId,
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "tools/call",
+          params: {
+            name: "search_feeds",
+            arguments: { keyword },
+          },
+          id: 2,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!searchRes.ok) {
+        return null;
+      }
+      const data = (await searchRes.json()) as {
+        result?: { content?: Array<{ text?: string }> };
+        error?: { message: string };
+      };
+
+      if (data.error || !data.result?.content?.[0]?.text) {
+        return null;
+      }
+
+      // 3. 解析搜索结果
+      const feedsText = data.result.content[0].text;
+      const feedsData = JSON.parse(feedsText) as {
+        feeds?: Array<{
+          noteCard?: {
+            displayTitle?: string;
+            interactInfo?: {
+              likedCount?: string;
+              commentCount?: string;
+            };
+            cover?: {
+              urlDefault?: string;
+            };
+          };
+        }>;
+      };
+
+      if (!feedsData.feeds?.length) {
+        return null;
+      }
+
+      return feedsData.feeds.slice(0, 5).map((f) => ({
+        title: f.noteCard?.displayTitle || "",
+        likes: f.noteCard?.interactInfo?.likedCount || "0",
+        comments: f.noteCard?.interactInfo?.commentCount || "0",
+        cover_url: f.noteCard?.cover?.urlDefault || "",
+      }));
+    } finally {
+      clearTimeout(timer);
     }
   } catch {
-    /* 不阻塞 */
+    // 小红书MCP未启动/超时/出错，静默降级
+    return null;
   }
-
-  const isHardArea =
-    /商场|购物|银泰|万达|商圈|医院|医学|附属|儿[保童]|人民医院|中心医院|火车站|高铁站|机场/.test(
-      poiType,
-    );
-  let difficulty: "easy" | "medium" | "hard" = "easy";
-  let estimatedCostPerHour = 5;
-
-  if (isHardArea) {
-    difficulty = parkingCount <= 2 ? "hard" : "medium";
-    estimatedCostPerHour = /商场|购物|银泰|万达|商圈/.test(poiType) ? 20 : 12;
-  } else if (parkingCount <= 1) {
-    difficulty = "medium";
-    estimatedCostPerHour = 8;
-  }
-
-  return { parkingCount, difficulty, estimatedCostPerHour, parkingNames };
 }
 
-// ─── 内部辅助函数：智能打分 ──────────────────────────────────────────────────
-
-interface ModeScore {
-  mode: string;
-  label: string;
-  score: number;
-  duration_minutes: number;
-  cost_yuan: number;
-  details: string;
-  available: boolean;
-}
-
-function scoreModes(opts: {
-  driving: { duration_minutes: number; taxi_cost: number; traffic_level: string } | null;
-  transit: TransitResult | null;
-  walking: WalkingResult | null;
-  parking: ParkingAssessment;
-  weather: WeatherResult | null;
-  distanceMeters: number;
-}): ModeScore[] {
-  const { driving, transit, walking, parking, weather, distanceMeters } = opts;
-  const modes: ModeScore[] = [];
-
-  const allDurations: number[] = [];
-  const allCosts: number[] = [];
-  if (driving) {
-    allDurations.push(driving.duration_minutes);
-    allCosts.push(driving.taxi_cost);
-  }
-  if (transit) {
-    allDurations.push(transit.duration_minutes);
-    allCosts.push(transit.cost_yuan);
-  }
-  if (walking && walking.duration_minutes <= 60) {
-    allDurations.push(walking.duration_minutes);
-    allCosts.push(0);
-  }
-
-  const maxDur = Math.max(...allDurations, 1);
-  const maxCost = Math.max(...allCosts, 1);
-
-  const isRainy = weather?.isRainy ?? false;
-  const isBad = weather?.isBadWeather ?? false;
-
-  // ── 打车方案 ──
-  if (driving) {
-    const timeScore = (1 - driving.duration_minutes / maxDur) * 100;
-    const costScore = (1 - driving.taxi_cost / maxCost) * 100;
-    const parkingScore = 100;
-    const weatherScore = isRainy ? 100 : isBad ? 100 : 60;
-    const comfortScore = 90;
-    const total =
-      timeScore * 0.3 +
-      costScore * 0.25 +
-      parkingScore * 0.2 +
-      weatherScore * 0.15 +
-      comfortScore * 0.1;
-    modes.push({
-      mode: "taxi",
-      label: "🚕 打车",
-      score: Math.round(total),
-      duration_minutes: driving.duration_minutes,
-      cost_yuan: driving.taxi_cost,
-      details: `预计${driving.duration_minutes}分钟，约¥${driving.taxi_cost}`,
-      available: true,
-    });
-  }
-
-  // ── 自驾方案 ──
-  if (driving) {
-    const timeScore = (1 - driving.duration_minutes / maxDur) * 100;
-    const parkingHours = 2;
-    const driveCost = Math.round(
-      driving.taxi_cost * 0.35 + parking.estimatedCostPerHour * parkingHours,
-    );
-    const costScore = (1 - driveCost / maxCost) * 100;
-    const parkingScoreMap = { easy: 90, medium: 50, hard: 15 };
-    const parkingScore = parkingScoreMap[parking.difficulty];
-    const trafficPenalty =
-      driving.traffic_level === "严重拥堵" ? -20 : driving.traffic_level === "拥堵" ? -10 : 0;
-    const weatherScore = isBad ? 40 : 70;
-    const comfortScore = 80;
-    const total = Math.max(
-      0,
-      timeScore * 0.3 +
-        costScore * 0.25 +
-        parkingScore * 0.2 +
-        weatherScore * 0.15 +
-        comfortScore * 0.1 +
-        trafficPenalty,
-    );
-    const parkingNote =
-      parking.difficulty === "hard"
-        ? "⚠️停车困难"
-        : parking.difficulty === "medium"
-          ? "停车一般"
-          : "停车方便";
-    modes.push({
-      mode: "drive",
-      label: "🚗 自驾",
-      score: Math.round(total),
-      duration_minutes: driving.duration_minutes,
-      cost_yuan: driveCost,
-      details: `预计${driving.duration_minutes}分钟，油费+停车≈¥${driveCost}（${parkingNote}，附近${parking.parkingCount}个停车场）`,
-      available: true,
-    });
-  }
-
-  // ── 公交地铁方案 ──
-  if (transit) {
-    const timeScore = (1 - transit.duration_minutes / maxDur) * 100;
-    const costScore = (1 - transit.cost_yuan / maxCost) * 100;
-    const parkingScore = 100;
-    const weatherScore = isRainy ? 50 : isBad ? 30 : 70;
-    let comfortScore = 80;
-    if (transit.transfers >= 2) {
-      comfortScore -= 20;
-    }
-    if (transit.walking_distance_meters > 1000) {
-      comfortScore -= 15;
-    }
-    if (transit.nightflag) {
-      comfortScore -= 10;
-    }
-    const total =
-      timeScore * 0.3 +
-      costScore * 0.25 +
-      parkingScore * 0.2 +
-      weatherScore * 0.15 +
-      Math.max(0, comfortScore) * 0.1;
-    const transferNote = transit.transfers === 0 ? "直达" : `换乘${transit.transfers}次`;
-    modes.push({
-      mode: "transit",
-      label: "🚇 公交/地铁",
-      score: Math.round(total),
-      duration_minutes: transit.duration_minutes,
-      cost_yuan: transit.cost_yuan,
-      details: `预计${transit.duration_minutes}分钟，¥${transit.cost_yuan}，${transferNote}，步行${fmtDistance(transit.walking_distance_meters)}`,
-      available: true,
-    });
-  }
-
-  // ── 步行方案（仅3公里内） ──
-  if (walking && distanceMeters <= 3000) {
-    const timeScore = (1 - walking.duration_minutes / maxDur) * 100;
-    const costScore = 100;
-    const parkingScore = 100;
-    const weatherScore = isBad ? 0 : isRainy ? 15 : 90;
-    let comfortScore = distanceMeters <= 1000 ? 85 : distanceMeters <= 2000 ? 60 : 35;
-    if (Number(weather?.temperature?.replace("°C", "") ?? 25) > 35) {
-      comfortScore -= 20;
-    }
-    const total =
-      timeScore * 0.3 +
-      costScore * 0.25 +
-      parkingScore * 0.2 +
-      weatherScore * 0.15 +
-      Math.max(0, comfortScore) * 0.1;
-    modes.push({
-      mode: "walk",
-      label: "🚶 步行",
-      score: Math.round(total),
-      duration_minutes: walking.duration_minutes,
-      cost_yuan: 0,
-      details: `预计${walking.duration_minutes}分钟，${fmtDistance(walking.distance_meters)}，免费`,
-      available: distanceMeters <= 3000,
-    });
-  }
-
-  modes.sort((a, b) => b.score - a.score);
-  return modes;
-}
-
-// ─── Tool 4: smart_trip — 智能出行决策 ────────────────────────────────────────
+// ─── Tool 4: smart_trip — 多模式出行数据工具 ───────────────────────────────────
 
 const SmartTripSchema = Type.Object({
-  origin: Type.String({ description: "出发地，如 '翡翠城东门'、'我家'" }),
-  destination: Type.String({ description: "目的地，如 '西湖银泰'、'省儿保'" }),
-  city: Type.Optional(Type.String({ description: "城市名，如 '杭州'，帮助解析地址" })),
-  arrival_time: Type.Optional(
-    Type.String({
-      description:
-        "期望到达时间，如 '下午3点'、'明天上午9点半'。传入后系统会结合各方案时长自动计算建议出发时间。",
-    }),
-  ),
+  origin: Type.String({ description: "出发地，如 '翡翠城东门'" }),
+  destination: Type.String({ description: "目的地，如 '西湖银泰'" }),
+  city: Type.Optional(Type.String({ description: "城市名，如 '杭州'" })),
+  arrival_time: Type.Optional(Type.String({ description: "期望到达时间，如 '下午3点'、'16:00'" })),
 });
 
 export function createSmartTripTool(): AnyAgentTool {
   return {
     name: "smart_trip",
     label: "Smart Trip Advisor",
-    description: `智能出行决策工具——当用户提到"去某地"、"怎么去"、"出行"、"路线"等出行意图时，优先调用此工具。
-该工具会自动：
-1. 并行查询驾车、公交地铁、步行等全部出行方案
-2. 查询目的地周边停车场数量和停车难度
-3. 查询实时天气
-4. 综合打分（耗时30%+费用25%+停车难度20%+天气15%+舒适度10%）
-5. 给出最优推荐 + 替代方案 + 理由
+    description: `多模式出行数据工具 — 当用户询问出行相关问题时调用。
+并行获取驾车、公交/地铁、步行的路线数据 + 实时天气 + 目的地附近停车场信息 + 小红书网友实时情报。
+返回原始数据，由 AI 综合判断推荐最适合的出行方式。
 
-【系统强制输出格式】收到此工具返回后，你必须严格按照以下5个区块输出，不得简化：
+注意事项：
+- 此工具只提供数据，不做推荐判断。请你根据数据智能分析最优方案。
+- 如果目的地涉及活动（灯会/演唱会/展览等），请同时调用 event_search 工具获取实时活动信息。
+- 如果需要驾车详情，再调用 maps_route；如需地图，maps_navigation_image 已内置生成。
 
-🧠 **智能推荐**
-写推荐的出行方式（加粗），以及推荐理由（2-3条，来自 recommendation.reasons）
+三层决策框架（分析时请参考）：
+第1层-安全性检查：有无交通管制/封路/恶劣天气等安全风险
+第2层-可行性判断：各出行方式是否可行、停车有无大问题、时间是否来得及
+第3层-体验优化：哪个路线体验更好、有没有省钱省时技巧、有没有值得顺路的推荐
 
-🚌/🚗/🚇 **推荐方案详情**
-详细描述推荐方案：耗时、费用、换乘/路线、步行距离等具体信息（来自 recommendation.details 和 transit/walking 数据）
-
-📊 **全方案对比**
-列出所有方案（打车/自驾/公交地铁/步行），每个写清楚：耗时、费用、评分、适合什么情况
-格式：1. 🚕 打车（评分XX分）：XXX  2. 🚗 自驾（评分XX分）：XXX  以此类推
-
-🌤️ **天气提示**
-写当前天气状况和对出行的影响（来自 weather 字段）
-
-⏰ **出发建议**
-结合推荐方案的耗时，给出建议出发时间和注意事项（如有 suggested_departure_time 字段则必须使用）
-
-==== 以上5个区块缺一不可 ====
-
-另外：如果最优方案是"驾车"或"打车"，完成以上文字输出后还需依次调用 maps_route + maps_navigation_image 生成导航地图（地图放在文字之后）。`,
+小红书情报处理：
+- 如果返回了 xiaohongshu_tips，请提炼与出行相关的有用信息（停车/路况/避坑/周边推荐）
+- 融入出行建议中，用自然语言标注来源如"近期有网友提到"
+- 信息冲突时优先级：安全信息 > 官方数据 > 网友经验
+- 不要原样列出帖子标题，提炼有价值信息即可`,
     parameters: SmartTripSchema,
     execute: async (_toolCallId, args) => {
       const apiKey = process.env.AMAP_API_KEY;
@@ -1194,138 +1148,136 @@ export function createSmartTripTool(): AnyAgentTool {
         geocode(originAddr, apiKey, city),
         geocode(destAddr, apiKey, city),
       ]);
-
       if (!originGeo) {
-        return jsonResult({ error: `无法解析出发地"${originAddr}"，请提供更详细的地址` });
+        return jsonResult({ error: `无法解析出发地"${originAddr}"` });
       }
       if (!destGeo) {
-        return jsonResult({ error: `无法解析目的地"${destAddr}"，请提供更详细的地址` });
+        return jsonResult({ error: `无法解析目的地"${destAddr}"` });
       }
 
-      // 2. 并行查询所有数据
+      // 2. 并行获取所有路线数据 + 天气 + 停车
       type StepItem = {
         road: string;
         instruction: string;
         tmcs?: Array<{ distance: string; status: string }>;
       };
-      const [driveData, transitData, walkData, weatherData, parkingData] = await Promise.all([
-        (async () => {
-          try {
-            const driveParams: Record<string, string> = {
-              origin: `${originGeo.lng},${originGeo.lat}`,
-              destination: `${destGeo.lng},${destGeo.lat}`,
-              key: apiKey,
-              extensions: "all",
-              strategy: "0",
-              output: "json",
-            };
-            if (arrivalTs) {
-              driveParams.departure_time = String(arrivalTs);
-            }
-            const data = (await amapGet("/v3/direction/driving", driveParams)) as {
-              status: string;
-              route?: {
-                taxi_cost: string;
-                paths: Array<{ distance: string; duration: string; steps: StepItem[] }>;
+      const [driveData, transitData, walkData, weatherData, parkingData, xhsData] =
+        await Promise.all([
+          // 驾车
+          (async () => {
+            try {
+              const driveParams: Record<string, string> = {
+                origin: `${originGeo.lng},${originGeo.lat}`,
+                destination: `${destGeo.lng},${destGeo.lat}`,
+                key: apiKey,
+                extensions: "all",
+                strategy: "0",
+                output: "json",
               };
-            };
-            if (data.status !== "1" || !data.route?.paths?.[0]) {
+              if (arrivalTs) {
+                driveParams.departure_time = String(arrivalTs);
+              }
+              const data = (await amapGet("/v3/direction/driving", driveParams)) as {
+                status: string;
+                route?: {
+                  taxi_cost: string;
+                  paths: Array<{ distance: string; duration: string; steps: StepItem[] }>;
+                };
+              };
+              if (data.status !== "1" || !data.route?.paths?.[0]) {
+                return null;
+              }
+              const p = data.route.paths[0];
+              const allTmcs = p.steps.flatMap((s) => s.tmcs ?? []);
+              const traffic = aggregateTraffic(allTmcs);
+              const roads = [
+                ...new Set(
+                  p.steps.map((s) => s.road?.trim()).filter((r): r is string => Boolean(r)),
+                ),
+              ].slice(0, 6);
+              return {
+                duration_min: Math.ceil(Number(p.duration) / 60),
+                distance_m: Number(p.distance),
+                taxi_cost: Number(data.route.taxi_cost) || 0,
+                traffic_level: traffic.level,
+                traffic_tip: traffic.tip,
+                main_roads: roads,
+              };
+            } catch {
               return null;
             }
-            const p = data.route.paths[0];
-            const allTmcs = p.steps.flatMap((s) => s.tmcs ?? []);
-            const traffic = aggregateTraffic(allTmcs);
-            return {
-              duration_minutes: Math.ceil(Number(p.duration) / 60),
-              distance_meters: Number(p.distance),
-              taxi_cost: Number(data.route.taxi_cost) || 0,
-              traffic_level: traffic.level,
-              traffic_tip: traffic.tip,
-            };
-          } catch {
-            return null;
-          }
-        })(),
-        transitRoute(originGeo.lng, originGeo.lat, destGeo.lng, destGeo.lat, city, apiKey),
-        walkingRoute(originGeo.lng, originGeo.lat, destGeo.lng, destGeo.lat, apiKey),
-        getAmapWeather(city, apiKey),
-        assessParking(destGeo.lng, destGeo.lat, `${destAddr}${destGeo.formatted}`, apiKey),
-      ]);
-
-      // 3. 智能打分
-      const drivingDistance = driveData?.distance_meters ?? 0;
-      const modes = scoreModes({
-        driving: driveData
-          ? {
-              duration_minutes: driveData.duration_minutes,
-              taxi_cost: driveData.taxi_cost,
-              traffic_level: driveData.traffic_level,
+          })(),
+          transitRoute(originGeo.lng, originGeo.lat, destGeo.lng, destGeo.lat, city, apiKey),
+          walkingRoute(originGeo.lng, originGeo.lat, destGeo.lng, destGeo.lat, apiKey),
+          getAmapWeather(city, apiKey),
+          // 停车场数量
+          (async () => {
+            try {
+              const data = (await amapGet("/v3/place/around", {
+                location: `${destGeo.lng},${destGeo.lat}`,
+                keywords: "停车场",
+                radius: "500",
+                key: apiKey,
+                output: "json",
+                offset: "10",
+              })) as { status: string; pois?: Array<{ name: string }> };
+              if (data.status === "1" && data.pois) {
+                return {
+                  nearby_count: data.pois.length,
+                  names: data.pois.slice(0, 3).map((p) => p.name),
+                };
+              }
+              return { nearby_count: 0, names: [] };
+            } catch {
+              return { nearby_count: 0, names: [] };
             }
-          : null,
-        transit: transitData,
-        walking: walkData,
-        parking: parkingData,
-        weather: weatherData,
-        distanceMeters: drivingDistance,
-      });
+          })(),
+          // 小红书网友实时情报（并行查询，不阻塞主流程）
+          searchXiaohongshu(destAddr),
+        ]);
 
-      // 4. 生成推荐理由
-      const best = modes[0];
-      const reasons: string[] = [];
-      if (best) {
-        if (best.mode === "taxi") {
-          if (parkingData.difficulty === "hard") {
-            reasons.push("目的地停车困难");
-          }
-          if (parkingData.estimatedCostPerHour >= 15) {
-            reasons.push(`停车费较贵（约¥${parkingData.estimatedCostPerHour}/小时）`);
-          }
-          if (weatherData?.isRainy) {
-            reasons.push(`当前天气${weatherData.weather}，不宜步行`);
-          }
-          if (driveData && driveData.traffic_level !== "畅通") {
-            reasons.push(`路况${driveData.traffic_level}`);
-          }
-        } else if (best.mode === "transit") {
-          if (transitData && transitData.cost_yuan < (driveData?.taxi_cost ?? 999)) {
-            reasons.push("费用最低");
-          }
-          if (transitData && transitData.transfers <= 1) {
-            reasons.push("换乘方便");
-          }
-          if (parkingData.difficulty !== "easy") {
-            reasons.push("目的地不太好停车");
-          }
-        } else if (best.mode === "drive") {
-          if (parkingData.difficulty === "easy") {
-            reasons.push("目的地停车方便");
-          }
-          if (driveData && driveData.traffic_level === "畅通") {
-            reasons.push("路况畅通");
-          }
-        } else if (best.mode === "walk") {
-          if (walkData && walkData.distance_meters <= 1500) {
-            reasons.push("距离很近");
-          }
-          if (!weatherData?.isRainy) {
-            reasons.push("天气适合步行");
+      // 3. 计算建议出发时间（仅在有到达时间时）
+      const suggestedDepartures: Record<string, string> = {};
+      if (arrivalTs) {
+        const modes = [
+          { key: "driving", min: driveData?.duration_min, buffer: 20 },
+          { key: "transit", min: transitData?.duration_minutes, buffer: 10 },
+          { key: "walking", min: walkData?.duration_minutes, buffer: 5 },
+        ];
+        for (const m of modes) {
+          if (m.min) {
+            const ts = arrivalTs - (m.min + m.buffer) * 60;
+            const d = new Date(ts * 1000);
+            suggestedDepartures[m.key] =
+              `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
           }
         }
       }
 
-      // 5. 计算建议出发时间
-      let suggestedDeparture: string | undefined;
-      if (arrivalTs && best) {
-        const bufferMin = best.mode === "drive" ? 20 : best.mode === "transit" ? 10 : 5;
-        const totalMin = best.duration_minutes + bufferMin;
-        const departTs = arrivalTs - totalMin * 60;
-        const d = new Date(departTs * 1000);
-        suggestedDeparture = `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
-      }
+      // 4. 生成导航地图
+      const mapResult = await generateNavMap(originGeo, destGeo, apiKey);
 
       return jsonResult({
+        current_time: new Date().toLocaleString("zh-CN", {
+          timeZone: "Asia/Shanghai",
+          hour12: false,
+        }),
         origin: originGeo.formatted,
         destination: destGeo.formatted,
+        driving: driveData ?? null,
+        transit: transitData
+          ? {
+              duration_min: transitData.duration_minutes,
+              walking_m: transitData.walking_distance_meters,
+              cost: transitData.cost_yuan,
+              transfers: transitData.transfers,
+              segments_desc: transitData.segments_desc,
+              nightflag: transitData.nightflag,
+            }
+          : null,
+        walking: walkData
+          ? { duration_min: walkData.duration_minutes, distance_m: walkData.distance_meters }
+          : null,
         weather: weatherData
           ? {
               condition: weatherData.weather,
@@ -1334,43 +1286,877 @@ export function createSmartTripTool(): AnyAgentTool {
               is_rainy: weatherData.isRainy,
             }
           : null,
-        parking_assessment: {
-          nearby_count: parkingData.parkingCount,
-          difficulty:
-            parkingData.difficulty === "hard"
-              ? "困难"
-              : parkingData.difficulty === "medium"
-                ? "一般"
-                : "轻松",
-          estimated_cost_per_hour: `¥${parkingData.estimatedCostPerHour}`,
-          parking_names: parkingData.parkingNames,
-        },
-        recommendation: best
+        parking: parkingData,
+        ...(xhsData
           ? {
-              mode: best.label,
-              score: best.score,
-              duration: `${best.duration_minutes}分钟`,
-              cost: `¥${best.cost_yuan}`,
-              reasons,
-              details: best.details,
+              xiaohongshu_tips: xhsData,
+              _xhs_note:
+                "以上是小红书近期热帖摘要，请提炼与出行相关的有用信息（停车/路况/避坑/推荐），融入出行建议中。",
             }
-          : null,
-        all_modes: modes.map((m) => ({
-          mode: m.label,
-          score: m.score,
-          duration: `${m.duration_minutes}分钟`,
-          cost: `¥${m.cost_yuan}`,
-          details: m.details,
-        })),
-        ...(suggestedDeparture ? { suggested_departure_time: suggestedDeparture } : {}),
+          : {}),
         ...(arrivalTimeStr ? { target_arrival_time: arrivalTimeStr } : {}),
-        traffic_status: driveData?.traffic_level ?? "未知",
-        traffic_tip: driveData?.traffic_tip ?? "",
-        _SYSTEM_NEXT_REQUIRED_ACTION:
-          best?.mode === "taxi" || best?.mode === "drive"
-            ? `⚡ 推荐方案是驾车/打车。你现在必须依次执行：① 调用 maps_route 工具（origin="${originAddr}", destination="${destAddr}", city="${city}"）；② maps_route 返回后立即调用 maps_navigation_image 工具生成地图。这两步都是强制要求，缺一不可。先看完数据再输出文字。`
-            : `✅ 推荐方案是${best?.label ?? "步行或公交"}，无需导航地图。请直接用大白话向用户说明推荐理由和各方案对比。`,
+        ...(Object.keys(suggestedDepartures).length > 0
+          ? { suggested_departure_by_mode: suggestedDepartures }
+          : {}),
+        ...(mapResult
+          ? { image_path: mapResult.image_path, map_description: mapResult.map_description }
+          : {}),
+        _note: mapResult
+          ? `✅ 导航地图已生成（已缩小为缩略图）。请先写完所有出行方案文字，然后在回复的【最后一行】放上地图：\n![导航路线图](/media?file=${mapResult.image_path})\n\n注意：地图必须放在全部文字之后，不要放在开头。不要使用 MEDIA 标签或 HTML 标签。`
+          : "",
       });
+    },
+  };
+}
+
+// ─── Tool 5.5: xhs_image_search — 小红书图片搜索 ──────────────────────────────
+
+const XhsImageSearchSchema = Type.Object({
+  keyword: Type.String({ description: "搜索关键词，如 '西溪湿地灯会 实拍'" }),
+  count: Type.Optional(
+    Type.Number({ description: "下载图片数量（默认3，最多5）", minimum: 1, maximum: 5 }),
+  ),
+});
+
+async function downloadXhsImage(url: string, index: number): Promise<string | null> {
+  if (!url) {
+    return null;
+  }
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Referer: "https://www.xiaohongshu.com",
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      return null;
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < 1000) {
+      return null;
+    } // 太小的图片可能是错误页面
+    const fs = await import("node:fs/promises");
+    const tmpDir = "/tmp/openclaw";
+    await fs.mkdir(tmpDir, { recursive: true });
+    const outPath = `${tmpDir}/xhs-${Date.now()}-${index}.webp`;
+    // 使用 sharp 缩小为 300px 宽的缩略图
+    try {
+      const sharp = (await import("sharp")).default;
+      const resized = await sharp(buf).resize({ width: 180 }).webp({ quality: 75 }).toBuffer();
+      await fs.writeFile(outPath, resized);
+    } catch {
+      // sharp 失败时保留原图
+      await fs.writeFile(outPath, buf);
+    }
+    return outPath;
+  } catch {
+    return null;
+  }
+}
+
+export function createXhsImageSearchTool(): AnyAgentTool {
+  return {
+    name: "xhs_image_search",
+    label: "Xiaohongshu Image Search",
+    description: `小红书图片搜索工具 — 当用户想看某个地方或活动的实拍照片时调用。
+搜索小红书热门帖子并下载封面图到本地，返回本地图片路径。
+
+使用场景：用户说"有没有XX的照片/实拍/图片"、"给我看看XX长什么样"等。
+返回结果包含多张图片路径，你必须用 MEDIA:<路径> 的格式展示每张图片（每张图独占一行）。
+展示图片时请附上简短的图片说明（来源帖子标题），让用户知道图片内容。`,
+    parameters: XhsImageSearchSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const keyword = readStringParam(params, "keyword", { required: true });
+      const count = Math.min(typeof params.count === "number" ? params.count : 3, 5);
+
+      // 搜索小红书
+      const results = await searchXiaohongshu(keyword, keyword);
+      if (!results || results.length === 0) {
+        return jsonResult({
+          error: "未搜索到相关小红书内容，小红书 MCP 服务可能未启动",
+          suggestion: "请确认小红书 MCP 服务已启动（端口 18060）",
+        });
+      }
+
+      // 筛选有封面图的帖子
+      const withCover = results.filter((r) => r.cover_url);
+      if (withCover.length === 0) {
+        return jsonResult({
+          error: "搜索到帖子但未找到可用图片",
+          posts: results.map((r) => r.title),
+        });
+      }
+
+      // 并行下载图片
+      const toDownload = withCover.slice(0, count);
+      const downloadResults = await Promise.all(
+        toDownload.map((r, i) => downloadXhsImage(r.cover_url, i)),
+      );
+
+      const images: Array<{ image_path: string; caption: string; likes: string }> = [];
+      for (let i = 0; i < toDownload.length; i++) {
+        const path = downloadResults[i];
+        const post = toDownload[i];
+        if (path && post) {
+          images.push({
+            image_path: path,
+            caption: post.title,
+            likes: post.likes,
+          });
+        }
+      }
+
+      if (images.length === 0) {
+        return jsonResult({
+          error: "图片下载失败（可能是小红书防盗链限制）",
+          posts: results.map((r) => r.title),
+        });
+      }
+
+      const { sanitizeToolResultImages } = await import("../../agents/tool-images.js");
+      const content: Array<{ type: string; text: string }> = [];
+
+      content.push({
+        type: "text",
+        text:
+          `✅ 成功为您找到 ${images.length} 张现场照片（已缩为缩略图）。\n` +
+          `【排版指令】请你在适当位置展示图片。图片已经被缩小为缩略图，请把下面这一行 Markdown 代码原样粘贴到你的回复中（所有图片必须放在同一行，中间用空格隔开，这样它们会横排显示）：\n\n` +
+          images.map((img) => `![${img.caption}](/media?file=${img.image_path})`).join(" ") +
+          `\n\n不要使用 MEDIA: 标签，不要使用 HTML 标签。上面的 Markdown 图片代码必须完全放在同一行。\n\n` +
+          `图片信息：\n` +
+          images.map((img, i) => `照片${i + 1}：${img.caption}（${img.likes}赞）`).join("\n"),
+      });
+
+      const result = {
+        content,
+        details: {
+          source: "小红书网友实拍",
+          images: images.map((img) => ({ caption: img.caption, likes: img.likes })),
+        },
+      };
+      return await sanitizeToolResultImages(
+        result as Parameters<typeof sanitizeToolResultImages>[0],
+        "xhs-images",
+      );
+    },
+  };
+}
+
+// ─── Tool 6: event_search ─────────────────────────────────────────────────────
+
+const EventSearchSchema = Type.Object({
+  destination: Type.String({ description: "活动目的地名称，如 '西溪湿地'" }),
+  user_query: Type.String({ description: "用户的原始问题全文，如 '今晚去西溪湿地看灯会怎么走'" }),
+});
+
+export function createEventSearchTool(options?: { geminiApiKey?: string }): AnyAgentTool {
+  return {
+    name: "event_search",
+    label: "Event Search",
+    description: `活动实时信息搜索 — 当目的地涉及特定活动或事件时调用（灯会、演唱会、展览、庙会、花展等）。
+使用联网搜索获取：活动实际入口/地址、停车限制、交通管制、人流预测、最新公告等信息。
+同时返回活动的精确地点（可能和地图默认地址不同，如"西溪湿地北门"而非"西溪湿地"）。
+
+⚠️ 如果搜索结果显示活动地点与 smart_trip 解析的目的地不同，以此工具返回的 suggested_destination 为准重新规划路线。`,
+    parameters: EventSearchSchema,
+    execute: async (_toolCallId, args) => {
+      const geminiApiKey = options?.geminiApiKey;
+      if (!geminiApiKey) {
+        return jsonResult({ error: "未配置 Gemini API Key，无法搜索活动信息" });
+      }
+
+      const params = args as Record<string, unknown>;
+      const destination = readStringParam(params, "destination", { required: true });
+      const userQuery = readStringParam(params, "user_query", { required: true });
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
+
+      // 让 Gemini 自己决定搜索维度，不硬编码
+      const searchPrompt = `用户问题：「${userQuery}」
+目的地：${destination}
+
+请联网搜索关于「${destination}」相关活动的最新信息，重点回答：
+1. 活动的具体位置/入口（是否在景区特定区域/门口）
+2. 是否有停车限制或交通管制
+3. 目前的开放时间和人流情况
+4. 游客需要注意的事项
+
+请基于真实搜索结果回答，明确标注信息来源时间。如果无法确认某项信息，直接说明。`;
+
+      async function geminiSearch(prompt: string): Promise<string | null> {
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              tools: [{ google_search: {} }],
+            }),
+            signal: AbortSignal.timeout(20000),
+          });
+          if (!res.ok) {
+            return null;
+          }
+          const data = (await res.json()) as {
+            candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+          };
+          return (
+            data.candidates?.[0]?.content?.parts
+              ?.map((p) => p.text)
+              .filter(Boolean)
+              .join("\n") ?? null
+          );
+        } catch {
+          return null;
+        }
+      }
+
+      const searchResult = await geminiSearch(searchPrompt);
+      if (!searchResult) {
+        return jsonResult({
+          error: "活动信息搜索失败",
+          note: "⚠️ 无法获取活动实时信息。请告知用户你无法确认当前活动状态，建议查询官方渠道。不要编造任何活动信息。",
+        });
+      }
+
+      // 提取精确活动地点
+      const locationPrompt = `根据以下活动信息，提取出最适合导航的【活动入口地点名称】（5-10个字，如"西溪湿地北门"）。
+只返回一个地点名，不加引号，不加解释。如果无法确定，返回：${destination}
+
+活动信息：
+${searchResult}`;
+
+      const suggestedDest = await geminiSearch(locationPrompt);
+      const cleanDest = suggestedDest?.trim().replace(/["'"]/g, "");
+      const finalSuggested =
+        cleanDest && cleanDest !== destination && cleanDest.length <= 20 ? cleanDest : undefined;
+
+      return jsonResult({
+        search_results: searchResult,
+        ...(finalSuggested ? { suggested_destination: finalSuggested } : {}),
+        note: "⚠️ 以上是联网搜索的真实活动信息。只能使用 search_results 中明确包含的信息，不得补充或推断未提及的细节。注意结合 current_time 判断活动是否仍在进行。",
+      });
+    },
+  };
+}
+
+// ─── 辅助函数：Haversine 球面距离 ────────────────────────────────────────────
+
+function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000; // 地球半径（米）
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ─── 辅助函数：贪心最近点路线优化 ──────────────────────────────────────────────
+
+interface GeoPoint {
+  name: string;
+  lng: number;
+  lat: number;
+  address: string;
+  type?: string;
+  rating?: string;
+  business_hours?: string;
+  tel?: string;
+}
+
+function optimizeRouteGreedy(start: { lng: number; lat: number }, points: GeoPoint[]): GeoPoint[] {
+  const remaining = [...points];
+  const ordered: GeoPoint[] = [];
+  let current = start;
+
+  while (remaining.length > 0) {
+    let nearestIdx = 0;
+    let nearestDist = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const p = remaining[i];
+      const dist = haversineDistance(current.lat, current.lng, p.lat, p.lng);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearestIdx = i;
+      }
+    }
+    const next = remaining.splice(nearestIdx, 1)[0];
+    ordered.push(next);
+    current = { lng: next.lng, lat: next.lat };
+  }
+  return ordered;
+}
+
+// ─── 辅助函数：解析时间段 ──────────────────────────────────────────────────────
+
+function parseDurationHours(input: string): number {
+  const s = input.trim();
+  // "3小时" "3h" "3hours"
+  const hourMatch = s.match(/(\d+)\s*(?:小时|h|hours?)/i);
+  if (hourMatch) {
+    return parseInt(hourMatch[1], 10);
+  }
+  // "半天" → 4h
+  if (s.includes("半天")) {
+    return 4;
+  }
+  // "一整天" "全天" → 8h
+  if (s.includes("一整天") || s.includes("全天") || s.includes("一天")) {
+    return 8;
+  }
+  // "2天" → 16h（两天有效游览时间）
+  const dayMatch = s.match(/(\d+)\s*天/);
+  if (dayMatch) {
+    return parseInt(dayMatch[1], 10) * 8;
+  }
+  // 默认 4 小时
+  return 4;
+}
+
+// ─── 辅助函数：POI 类型推荐停留时间（分钟）──────────────────────────────────────
+
+function suggestedStayMinutes(poiType: string): number {
+  if (/风景|景区|公园|寺|庙|塔|湖|山|古镇|遗址/.test(poiType)) {
+    return 60;
+  }
+  if (/餐饮|美食|饭|菜|火锅|烧烤|小吃|面|粉/.test(poiType)) {
+    return 45;
+  }
+  if (/购物|商场|市场|步行街|商业/.test(poiType)) {
+    return 30;
+  }
+  if (/博物|展览|美术|科技馆|纪念/.test(poiType)) {
+    return 60;
+  }
+  if (/咖啡|茶|酒吧|甜品/.test(poiType)) {
+    return 30;
+  }
+  return 40;
+}
+
+// ─── 辅助函数：高德 POI 类型编码映射 ────────────────────────────────────────────
+
+function interestsToTypes(interests: string): string {
+  const mapping: Array<[RegExp, string]> = [
+    [/景点|风景|自然|公园|古迹|历史|文化/, "110000"], // 风景名胜
+    [/美食|吃|餐|饭|小吃/, "050000"], // 餐饮服务
+    [/购物|买|商场|特产/, "060000"], // 购物服务
+    [/娱乐|玩|游乐|KTV|电影/, "080000"], // 休闲娱乐
+    [/博物|展览|美术|科技/, "140000"], // 科教文化
+  ];
+  const types: string[] = [];
+  for (const [pattern, code] of mapping) {
+    if (pattern.test(interests)) {
+      types.push(code);
+    }
+  }
+  // 未匹配到则默认搜景点+美食
+  return types.length > 0 ? types.join("|") : "110000|050000";
+}
+
+// ─── 辅助函数：生成多点标注地图 ──────────────────────────────────────────────
+
+async function generateMultiPointMap(
+  points: Array<{ name: string; lng: number; lat: number; order: number }>,
+  apiKey: string,
+): Promise<{ image_path: string; map_description: string } | null> {
+  try {
+    const markers: string[] = [];
+    const colors = [
+      "0xFF4444",
+      "0x4488FF",
+      "0x44BB44",
+      "0xFF8800",
+      "0xAA44FF",
+      "0x00BBCC",
+      "0xFF44AA",
+      "0x888888",
+    ];
+    for (const p of points) {
+      const color = colors[(p.order - 1) % colors.length] ?? "0xFF4444";
+      markers.push(`large,${color},${p.order}:${p.lng},${p.lat}`);
+    }
+
+    const staticUrl = new URL(`${AMAP_BASE}/v3/staticmap`);
+    staticUrl.searchParams.set("key", apiKey);
+    staticUrl.searchParams.set("size", "800*600");
+    staticUrl.searchParams.set("scale", "2");
+    staticUrl.searchParams.set("markers", markers.join("|"));
+
+    const imgRes = await fetch(staticUrl.toString());
+    if (!imgRes.ok) {
+      return null;
+    }
+    const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+
+    const fs = await import("node:fs/promises");
+    const tmpDir = "/tmp/openclaw";
+    await fs.mkdir(tmpDir, { recursive: true });
+    const tmpPath = `${tmpDir}/trip-map-${Date.now()}.png`;
+    try {
+      const sharp = (await import("sharp")).default;
+      const resized = await sharp(imgBuf).resize({ width: 350 }).png({ quality: 80 }).toBuffer();
+      await fs.writeFile(tmpPath, resized);
+    } catch {
+      await fs.writeFile(tmpPath, imgBuf);
+    }
+
+    const desc = points.map((p) => `${p.order}. ${p.name}`).join("、");
+    return {
+      image_path: tmpPath,
+      map_description: `地图标注了 ${points.length} 个地点：${desc}。编号越小越先到达。`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Tool 7: trip_planner — 当地行程规划工具 ────────────────────────────────────
+
+const TripPlannerSchema = Type.Object({
+  location: Type.String({
+    description:
+      "当前所在位置或目的地城市/区域，如 '西湖' '春熙路' '南京路步行街' '我在灵隐寺附近'",
+  }),
+  city: Type.Optional(
+    Type.String({
+      description: "城市名，如 '杭州'、'成都'。可从 location 自动推断",
+    }),
+  ),
+  interests: Type.Optional(
+    Type.String({
+      description: "兴趣偏好，如 '美食' '历史文化' '自然风景' '购物' '娱乐'。可组合多个",
+    }),
+  ),
+  places: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "想去的地点列表，如 ['灵隐寺', '河坊街', '南宋御街']。提供此参数时进入路线优化模式",
+    }),
+  ),
+  duration: Type.Optional(
+    Type.String({
+      description: "可用时间，如 '半天' '3小时' '一整天'",
+    }),
+  ),
+  transport: Type.Optional(
+    Type.String({
+      description: "交通方式偏好：'步行'（默认）、'驾车'、'公交'",
+    }),
+  ),
+});
+
+export function createTripPlannerTool(): AnyAgentTool {
+  return {
+    name: "trip_planner",
+    label: "Trip Planner",
+    description: `当地行程规划工具 — 用户到达一个地方后，进行当地游玩/美食/行程规划时调用。
+
+两种模式：
+1. 推荐模式：用户只说了当前位置（无 places），搜索周边景点/美食/娱乐，按评分和距离排序推荐
+2. 规划模式：用户给了多个想去的地点（places），自动优化游览顺序，编排带时间节点的行程表
+
+数据融合：高德 POI（评分、营业时间、距离）+ 小红书网友实拍和推荐
+返回结构化数据，由 AI 综合组织回复。
+
+注意事项：
+- 推荐模式下，根据 interests 参数筛选类型（景点/美食/购物/娱乐）
+- 规划模式下，使用贪心最近点算法优化路线顺序
+- 结合营业时间和用餐时段安排行程
+- 如果有地图生成，回复第一行使用 MEDIA 标签展示`,
+    parameters: TripPlannerSchema,
+    execute: async (_toolCallId, args) => {
+      const apiKey = process.env.AMAP_API_KEY;
+      if (!apiKey) {
+        logWarn("trip_planner: AMAP_API_KEY not set");
+        return jsonResult({ error: "未配置高德地图 API Key（AMAP_API_KEY）" });
+      }
+
+      const params = args as Record<string, unknown>;
+      const locationStr = readStringParam(params, "location", { required: true });
+      const city = typeof params.city === "string" ? params.city : undefined;
+      const interests = typeof params.interests === "string" ? params.interests : undefined;
+      const places = readStringArrayParam(params, "places");
+      const durationStr = typeof params.duration === "string" ? params.duration : undefined;
+      const transport = typeof params.transport === "string" ? params.transport : "步行";
+
+      // 1. 解析当前位置坐标
+      const locationGeo = await geocode(locationStr, apiKey, city);
+      if (!locationGeo) {
+        return jsonResult({ error: `无法识别位置"${locationStr}"，请提供更具体的地址` });
+      }
+      const resolvedCity = city ?? locationGeo.formatted.match(/^(.{2,3}(?:市|省))/)?.[1] ?? "未知";
+
+      // 2. 获取天气（并行，不阻塞主逻辑）
+      const weatherPromise = getAmapWeather(resolvedCity, apiKey);
+
+      if (places && places.length > 0) {
+        // ─── 规划模式：多点路线优化 ─────────────────────────────
+
+        // 解析所有地点坐标
+        const geoResults = await Promise.all(
+          places.map(async (name) => {
+            const geo = await geocode(name, apiKey, city ?? resolvedCity);
+            if (!geo) {
+              return null;
+            }
+            return {
+              name,
+              lng: parseFloat(geo.lng),
+              lat: parseFloat(geo.lat),
+              address: geo.formatted,
+            };
+          }),
+        );
+
+        const validPoints: GeoPoint[] = [];
+        const failedPlaces: string[] = [];
+        for (let i = 0; i < places.length; i++) {
+          const result = geoResults[i];
+          if (result) {
+            validPoints.push(result);
+          } else {
+            failedPlaces.push(places[i]);
+          }
+        }
+
+        if (validPoints.length === 0) {
+          return jsonResult({ error: "所有地点都无法识别，请检查地点名称" });
+        }
+
+        // 为每个点补充 POI 详情（评分、营业时间、类型）
+        const enrichedPoints = await Promise.all(
+          validPoints.map(async (point) => {
+            try {
+              const data = (await amapGet("/v3/place/text", {
+                keywords: point.name,
+                city: city ?? resolvedCity,
+                key: apiKey,
+                output: "json",
+                offset: "1",
+                extensions: "all",
+              })) as {
+                status: string;
+                pois?: Array<{
+                  name: string;
+                  type: string;
+                  biz_ext?: { rating?: string; opentime?: string };
+                  tel: string | [];
+                }>;
+              };
+              const poi = data.status === "1" ? data.pois?.[0] : undefined;
+              return {
+                ...point,
+                type: poi?.type?.split(";")[0] ?? "",
+                rating:
+                  poi?.biz_ext?.rating && poi.biz_ext.rating !== "0"
+                    ? poi.biz_ext.rating
+                    : undefined,
+                business_hours: poi?.biz_ext?.opentime || undefined,
+                tel: poi?.tel && !Array.isArray(poi.tel) ? poi.tel : undefined,
+              };
+            } catch {
+              return point;
+            }
+          }),
+        );
+
+        // 贪心路线优化
+        const startPoint = { lng: parseFloat(locationGeo.lng), lat: parseFloat(locationGeo.lat) };
+        const optimized = optimizeRouteGreedy(startPoint, enrichedPoints);
+
+        // 获取各段实际路线耗时
+        const segments: Array<{ distance_m: number; duration_min: number }> = [];
+        let prevLng = locationGeo.lng;
+        let prevLat = locationGeo.lat;
+        for (const point of optimized) {
+          const routeFn =
+            transport === "驾车"
+              ? async () => {
+                  const data = (await amapGet("/v3/direction/driving", {
+                    origin: `${prevLng},${prevLat}`,
+                    destination: `${point.lng},${point.lat}`,
+                    key: apiKey,
+                    strategy: "0",
+                    output: "json",
+                  })) as {
+                    status: string;
+                    route?: { paths: Array<{ distance: string; duration: string }> };
+                  };
+                  const p = data.status === "1" ? data.route?.paths?.[0] : undefined;
+                  return p
+                    ? {
+                        distance_m: Number(p.distance),
+                        duration_min: Math.ceil(Number(p.duration) / 60),
+                      }
+                    : null;
+                }
+              : async () => {
+                  const result = await walkingRoute(
+                    prevLng,
+                    prevLat,
+                    String(point.lng),
+                    String(point.lat),
+                    apiKey,
+                  );
+                  return result
+                    ? { distance_m: result.distance_meters, duration_min: result.duration_minutes }
+                    : null;
+                };
+
+          try {
+            const seg = await routeFn();
+            segments.push(seg ?? { distance_m: 0, duration_min: 0 });
+          } catch {
+            segments.push({ distance_m: 0, duration_min: 0 });
+          }
+          prevLng = String(point.lng);
+          prevLat = String(point.lat);
+        }
+
+        // 时间编排
+        const durationHours = durationStr ? parseDurationHours(durationStr) : 8;
+        const now = new Date();
+        let currentMinutes = now.getHours() * 60 + now.getMinutes();
+        const endMinutes = currentMinutes + durationHours * 60;
+
+        const itinerary: Array<{
+          order: number;
+          name: string;
+          address: string;
+          type: string;
+          rating?: string;
+          business_hours?: string;
+          arrive_time: string;
+          suggested_stay: string;
+          to_next?: string;
+        }> = [];
+
+        let totalDistanceM = 0;
+        for (let i = 0; i < optimized.length; i++) {
+          const point = optimized[i];
+          const seg = segments[i];
+          currentMinutes += seg.duration_min;
+          totalDistanceM += seg.distance_m;
+
+          const arriveHour = Math.floor(currentMinutes / 60) % 24;
+          const arriveMin = currentMinutes % 60;
+          const arriveTime = `${arriveHour.toString().padStart(2, "0")}:${arriveMin.toString().padStart(2, "0")}`;
+
+          const stayMin = suggestedStayMinutes(point.type ?? "");
+
+          const nextSeg = i < segments.length - 1 ? segments[i + 1] : undefined;
+          const toNext = nextSeg
+            ? `${transport}${fmtDuration(nextSeg.duration_min * 60)}/${fmtDistance(nextSeg.distance_m)}`
+            : undefined;
+
+          itinerary.push({
+            order: i + 1,
+            name: point.name,
+            address: point.address,
+            type: point.type ?? "",
+            rating: point.rating,
+            business_hours: point.business_hours,
+            arrive_time: arriveTime,
+            suggested_stay: `${stayMin}分钟`,
+            to_next: toNext,
+          });
+
+          currentMinutes += stayMin;
+        }
+
+        const timeWarning =
+          currentMinutes > endMinutes
+            ? `⚠️ 预计总时长超出可用时间约${Math.ceil((currentMinutes - endMinutes) / 60)}小时，建议精简行程`
+            : undefined;
+
+        // 并行：天气、小红书情报、地图
+        const [weatherData, xhsData, mapResult] = await Promise.all([
+          weatherPromise,
+          searchXiaohongshu(optimized[0]?.name ?? locationStr),
+          generateMultiPointMap(
+            optimized.map((p, i) => ({ name: p.name, lng: p.lng, lat: p.lat, order: i + 1 })),
+            apiKey,
+          ),
+        ]);
+
+        return jsonResult({
+          mode: "itinerary",
+          current_time: new Date().toLocaleString("zh-CN", {
+            timeZone: "Asia/Shanghai",
+            hour12: false,
+          }),
+          location: locationGeo.formatted,
+          city: resolvedCity,
+          transport,
+          weather: weatherData
+            ? {
+                condition: weatherData.weather,
+                temperature: weatherData.temperature,
+                wind: weatherData.wind,
+                is_rainy: weatherData.isRainy,
+              }
+            : null,
+          itinerary,
+          total_distance: fmtDistance(totalDistanceM),
+          total_duration: fmtDuration(
+            currentMinutes * 60 - now.getHours() * 3600 - now.getMinutes() * 60,
+          ),
+          ...(failedPlaces.length > 0
+            ? { failed_places: failedPlaces, _fail_note: "以上地点无法识别，已跳过" }
+            : {}),
+          ...(timeWarning ? { time_warning: timeWarning } : {}),
+          ...(xhsData
+            ? {
+                xiaohongshu_tips: xhsData,
+                _xhs_note:
+                  "提炼小红书网友与这些景点相关的有用信息（避坑/推荐/注意事项），融入行程建议中。",
+              }
+            : {}),
+          ...(mapResult
+            ? {
+                image_path: mapResult.image_path,
+                map_description: mapResult.map_description,
+                _note: `✅ 行程地图已生成。回复第一行必须是：\n![行程路线图](/media?file=${mapResult.image_path})\n\n不要使用 MEDIA 标签或 HTML 标签。`,
+              }
+            : {}),
+        });
+      } else {
+        // ─── 推荐模式：搜索周边 POI 推荐 ─────────────────────
+
+        const types = interests ? interestsToTypes(interests) : "110000|050000";
+
+        // 并行搜索 POI + 天气 + 小红书
+        const [poiData, weatherData, xhsData] = await Promise.all([
+          (async () => {
+            try {
+              const data = (await amapGet("/v3/place/around", {
+                location: `${locationGeo.lng},${locationGeo.lat}`,
+                types,
+                radius: "3000",
+                key: apiKey,
+                output: "json",
+                offset: "20",
+                extensions: "all",
+                sortrule: "weight",
+              })) as {
+                status: string;
+                pois?: Array<{
+                  name: string;
+                  address: string | [];
+                  location: string;
+                  distance: string;
+                  type: string;
+                  tel: string | [];
+                  biz_ext?: { rating?: string; opentime?: string; cost?: string };
+                }>;
+              };
+              return data.status === "1" ? (data.pois ?? []) : [];
+            } catch {
+              return [];
+            }
+          })(),
+          weatherPromise,
+          searchXiaohongshu(`${locationStr} ${interests ?? "推荐"}`),
+        ]);
+
+        // 按评分排序（有评分的优先，评分高的靠前）
+        const sortedPois = poiData
+          .filter((p) => p.name && p.location)
+          .toSorted((a, b) => {
+            const rA = parseFloat(a.biz_ext?.rating ?? "0");
+            const rB = parseFloat(b.biz_ext?.rating ?? "0");
+            if (rA !== rB) {
+              return rB - rA;
+            }
+            return Number(a.distance) - Number(b.distance);
+          })
+          .slice(0, 10);
+
+        // 分类整理
+        const recommendations = sortedPois.map((p) => {
+          const typeName = p.type?.split(";")[0] ?? "";
+          let category = "其他";
+          if (/风景|景区|公园|寺|庙|古镇/.test(typeName)) {
+            category = "景点";
+          } else if (/餐饮|美食|饭|菜|火锅|小吃/.test(typeName)) {
+            category = "美食";
+          } else if (/购物|商场|步行街/.test(typeName)) {
+            category = "购物";
+          } else if (/娱乐|游乐|KTV|电影/.test(typeName)) {
+            category = "娱乐";
+          } else if (/博物|展览|美术/.test(typeName)) {
+            category = "文化";
+          }
+
+          return {
+            name: p.name,
+            category,
+            rating: p.biz_ext?.rating && p.biz_ext.rating !== "0" ? p.biz_ext.rating : undefined,
+            distance: fmtDistance(Number(p.distance)),
+            address: Array.isArray(p.address) ? "" : p.address,
+            business_hours: p.biz_ext?.opentime || undefined,
+            avg_cost:
+              p.biz_ext?.cost && p.biz_ext.cost !== "0" ? `人均${p.biz_ext.cost}元` : undefined,
+            tel: Array.isArray(p.tel) ? undefined : p.tel || undefined,
+          };
+        });
+
+        // 生成推荐地点的地图
+        const mapResult =
+          recommendations.length > 0
+            ? await generateMultiPointMap(
+                recommendations.slice(0, 8).map((r, i) => {
+                  const poi = sortedPois.find((p) => p.name === r.name);
+                  const [lng, lat] = poi?.location?.split(",") ?? ["0", "0"];
+                  return { name: r.name, lng: parseFloat(lng), lat: parseFloat(lat), order: i + 1 };
+                }),
+                apiKey,
+              )
+            : null;
+
+        return jsonResult({
+          mode: "recommend",
+          current_time: new Date().toLocaleString("zh-CN", {
+            timeZone: "Asia/Shanghai",
+            hour12: false,
+          }),
+          location: locationGeo.formatted,
+          city: resolvedCity,
+          interests: interests ?? "景点+美食",
+          weather: weatherData
+            ? {
+                condition: weatherData.weather,
+                temperature: weatherData.temperature,
+                wind: weatherData.wind,
+                is_rainy: weatherData.isRainy,
+              }
+            : null,
+          recommendations,
+          ...(recommendations.length === 0
+            ? { _empty_note: "未找到匹配的推荐，建议换个关键词或扩大搜索范围" }
+            : {}),
+          ...(xhsData
+            ? {
+                xiaohongshu_tips: xhsData,
+                _xhs_note: "提炼小红书网友关于这些地方的推荐和避坑建议，融入推荐介绍中。",
+              }
+            : {}),
+          ...(mapResult
+            ? {
+                image_path: mapResult.image_path,
+                map_description: mapResult.map_description,
+                _note: `✅ 推荐地图已生成。回复第一行必须是：\n![推荐地点地图](/media?file=${mapResult.image_path})\n\n不要使用 MEDIA 标签或 HTML 标签。`,
+              }
+            : {}),
+        });
+      }
     },
   };
 }
