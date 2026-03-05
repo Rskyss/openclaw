@@ -549,7 +549,7 @@ export function createMapsNavImageTool(): AnyAgentTool {
     name: "maps_navigation_image",
     label: "Navigation Map Image",
     description:
-      "生成导航地图图片，返回图片的本地路径。【强制要求】收到此工具的返回结果后，你在写最终文字回复时，必须把返回的 image_path 字段写在你回复的【第一行】，格式为：MEDIA:<image_path的值>（单独一行，无其他文字）。写完 MEDIA 行后再写正常的出行建议文字。这样图片才会和文字显示在同一条消息里。你不需要解释这个过程，直接执行即可。",
+      "生成导航地图图片，返回图片的本地路径。【强制要求】收到此工具的返回结果后，你在写最终文字回复时，必须把返回的 image_path 字段写在你回复的【第一行】，格式为：![导航地图](/media?file=<image_path的值>)。直接在 Markdown 中插入这张图片即可。",
     parameters: MapsNavImageSchema,
     execute: async (_toolCallId, args) => {
       const apiKey = process.env.AMAP_API_KEY;
@@ -591,7 +591,7 @@ export function createMapsNavImageTool(): AnyAgentTool {
       }
 
       return jsonResult({
-        _SYSTEM_IMAGE_INSTRUCTION: `✅ 导航地图已生成（已缩小为缩略图）。请你先写完所有的出行方案分析文字，然后在回复的【最后一行】放上地图：\n![导航路线图](/media?file=${mapResult.image_path})\n\n注意：地图必须放在全部文字之后，不要放在开头。不要使用 MEDIA 标签，不要使用 HTML 标签。`,
+        _SYSTEM_IMAGE_INSTRUCTION: `✅ 导航地图已生成（已缩小为缩略图）。排版要求：请把地图放在【驾车方案段落】的正下方（而不是全文最后），格式为：\n![驾车路线图](/media?file=${mapResult.image_path})\n\n直接使用标准 Markdown 格式。`,
         ...mapResult,
       });
     },
@@ -745,6 +745,16 @@ async function generateNavMap(
       return null;
     }
     const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+    // 校验是否为有效的 PNG 图片（高德 API 可能返回 200 + JSON 错误体）
+    if (
+      imgBuf.length < 100 ||
+      imgBuf[0] !== 0x89 ||
+      imgBuf[1] !== 0x50 ||
+      imgBuf[2] !== 0x4e ||
+      imgBuf[3] !== 0x47
+    ) {
+      return null;
+    }
 
     const fs = await import("node:fs/promises");
     const tmpDir = "/tmp/openclaw";
@@ -753,7 +763,7 @@ async function generateNavMap(
     // 使用 sharp 缩小为 500px 宽的缩略图
     try {
       const sharp = (await import("sharp")).default;
-      const resized = await sharp(imgBuf).resize({ width: 350 }).png({ quality: 80 }).toBuffer();
+      const resized = await sharp(imgBuf).resize({ width: 800 }).png({ quality: 85 }).toBuffer();
       await fs.writeFile(tmpPath, resized);
     } catch {
       // sharp 失败时保留原图
@@ -993,7 +1003,7 @@ interface XhsSearchResult {
 const XHS_MCP_URL = "http://127.0.0.1:18060/mcp";
 const XHS_TIMEOUT_MS = 15000;
 
-async function searchXiaohongshu(
+export async function searchXiaohongshu(
   destination: string,
   rawKeyword?: string,
 ): Promise<XhsSearchResult[] | null> {
@@ -1089,8 +1099,9 @@ async function searchXiaohongshu(
     } finally {
       clearTimeout(timer);
     }
-  } catch {
+  } catch (error) {
     // 小红书MCP未启动/超时/出错，静默降级
+    console.error("Xiaohongshu search error:", error);
     return null;
   }
 }
@@ -1302,7 +1313,7 @@ export function createSmartTripTool(): AnyAgentTool {
           ? { image_path: mapResult.image_path, map_description: mapResult.map_description }
           : {}),
         _note: mapResult
-          ? `✅ 导航地图已生成（已缩小为缩略图）。请先写完所有出行方案文字，然后在回复的【最后一行】放上地图：\n![导航路线图](/media?file=${mapResult.image_path})\n\n注意：地图必须放在全部文字之后，不要放在开头。不要使用 MEDIA 标签或 HTML 标签。`
+          ? `✅ 导航地图已生成（已缩小为缩略图）。排版要求：请把地图放在【驾车方案段落】的正下方（而不是全文最后），格式为：\n![驾车路线图](/media?file=${mapResult.image_path})\n\n直接使用标准 Markdown 格式。\n如果后续还有徒步路线图（hiking_route_map），也应紧跟在徒步路线段落的正下方。`
           : "",
       });
     },
@@ -1365,7 +1376,7 @@ export function createXhsImageSearchTool(): AnyAgentTool {
 搜索小红书热门帖子并下载封面图到本地，返回本地图片路径。
 
 使用场景：用户说"有没有XX的照片/实拍/图片"、"给我看看XX长什么样"等。
-返回结果包含多张图片路径，你必须用 MEDIA:<路径> 的格式展示每张图片（每张图独占一行）。
+返回结果包含多张图片路径，你必须用 Markdown 图片格式展示每张图片（例如：![图片说明](/media?file=<路径>)）。
 展示图片时请附上简短的图片说明（来源帖子标题），让用户知道图片内容。`,
     parameters: XhsImageSearchSchema,
     execute: async (_toolCallId, args) => {
@@ -1426,7 +1437,7 @@ export function createXhsImageSearchTool(): AnyAgentTool {
           `✅ 成功为您找到 ${images.length} 张现场照片（已缩为缩略图）。\n` +
           `【排版指令】请你在适当位置展示图片。图片已经被缩小为缩略图，请把下面这一行 Markdown 代码原样粘贴到你的回复中（所有图片必须放在同一行，中间用空格隔开，这样它们会横排显示）：\n\n` +
           images.map((img) => `![${img.caption}](/media?file=${img.image_path})`).join(" ") +
-          `\n\n不要使用 MEDIA: 标签，不要使用 HTML 标签。上面的 Markdown 图片代码必须完全放在同一行。\n\n` +
+          `\n\n严格使用标准 Markdown 格式显示图片，上面的 Markdown 图片代码必须完全放在同一行。\n\n` +
           `图片信息：\n` +
           images.map((img, i) => `照片${i + 1}：${img.caption}（${img.likes}赞）`).join("\n"),
       });
@@ -1701,7 +1712,7 @@ async function generateMultiPointMap(
     const tmpPath = `${tmpDir}/trip-map-${Date.now()}.png`;
     try {
       const sharp = (await import("sharp")).default;
-      const resized = await sharp(imgBuf).resize({ width: 350 }).png({ quality: 80 }).toBuffer();
+      const resized = await sharp(imgBuf).resize({ width: 800 }).png({ quality: 85 }).toBuffer();
       await fs.writeFile(tmpPath, resized);
     } catch {
       await fs.writeFile(tmpPath, imgBuf);
@@ -2023,7 +2034,7 @@ export function createTripPlannerTool(): AnyAgentTool {
             ? {
                 image_path: mapResult.image_path,
                 map_description: mapResult.map_description,
-                _note: `✅ 行程地图已生成。回复第一行必须是：\n![行程路线图](/media?file=${mapResult.image_path})\n\n不要使用 MEDIA 标签或 HTML 标签。`,
+                _note: `✅ 行程地图已生成。回复第一行必须是：\n![行程路线图](/media?file=${mapResult.image_path})\n\n直接使用标准 Markdown 格式。`,
               }
             : {}),
         });
@@ -2152,11 +2163,565 @@ export function createTripPlannerTool(): AnyAgentTool {
             ? {
                 image_path: mapResult.image_path,
                 map_description: mapResult.map_description,
-                _note: `✅ 推荐地图已生成。回复第一行必须是：\n![推荐地点地图](/media?file=${mapResult.image_path})\n\n不要使用 MEDIA 标签或 HTML 标签。`,
+                _note: `✅ 推荐地图已生成。回复第一行必须是：\n![推荐地点地图](/media?file=${mapResult.image_path})\n\n直接使用标准 Markdown 格式。`,
               }
             : {}),
         });
       }
+    },
+  };
+}
+
+// ─── Tool: hiking_route_map — 多途经点户外路线地图 ────────────────────────────
+
+const HikingRouteMapSchema = Type.Object({
+  waypoints: Type.Array(Type.String(), {
+    description:
+      "途经点名称列表（按路线顺序），如 ['断桥', '保俶塔', '葛岭', '紫云洞', '乌石峰', '曲院风荷']。第一个为起点，最后一个为终点。",
+    minItems: 2,
+  }),
+  city: Type.Optional(Type.String({ description: "城市名，如 '杭州'，辅助地理编码" })),
+  mode: Type.Optional(
+    Type.String({
+      description:
+        "路线模式：'walking'（步行/徒步，默认）或 'cycling'（骑行）。骑行模式会使用骑行/驾车导航 API 规划更合理的骑行路线。",
+      enum: ["walking", "cycling"],
+    }),
+  ),
+});
+
+// 判断名称是否像路名（而非地标/景点）
+function looksLikeRoadName(name: string): boolean {
+  return /(?:路|街|道|大道|巷|弄|堤|桥|环线|绿道)$/.test(name.trim());
+}
+
+export function createHikingRouteMapTool(): AnyAgentTool {
+  return {
+    name: "hiking_route_map",
+    label: "Hiking Route Map",
+    description: `多途经点户外路线地图工具 — 当你向用户推荐了一条具体的户外活动路线（徒步/登山/骑行/跑步/散步），并列出了多个途经点时，调用此工具生成一张沿路线串联所有途经点的地图。
+
+使用场景：
+- 你在回复中描述了"从A → B → C → D"这样的步行/登山/骑行/跑步路线
+- 用户询问详细的徒步路线图、骑行路线图等
+- 你推荐了景区内的游览路线或城市骑行环线
+
+参数：按路线顺序传入途经点名称数组，工具会自动：
+1. 地理编码每个途经点
+2. 请求相邻点之间的导航路线（根据 mode 选择步行或骑行导航）
+3. 在地图上画出完整的路线（绿色线）并标注每个途经点的序号
+
+骑行路线请传 mode="cycling"，步行/徒步路线用默认的 mode="walking"。
+返回地图后，把它放在你的路线描述段落的正下方。`,
+    parameters: HikingRouteMapSchema,
+    execute: async (_toolCallId, args) => {
+      const apiKey = process.env.AMAP_API_KEY;
+      if (!apiKey) {
+        logWarn("hiking_route_map: AMAP_API_KEY not set");
+        return jsonResult({ error: "未配置高德地图 API Key（AMAP_API_KEY）" });
+      }
+
+      const params = args as Record<string, unknown>;
+      const waypoints = params.waypoints as string[];
+      const city = typeof params.city === "string" ? params.city : "杭州";
+      const mode =
+        typeof params.mode === "string" && params.mode === "cycling" ? "cycling" : "walking";
+      const modeLabel = mode === "cycling" ? "骑行" : "步行";
+
+      if (!Array.isArray(waypoints) || waypoints.length < 2) {
+        return jsonResult({ error: "至少需要2个途经点" });
+      }
+
+      const key: string = apiKey;
+
+      // 辅助：用 POI 搜索定位景点（比 geocode 更适合景点/地标名称）
+      // 对路名（XX路/XX街/XX道）增加城市前缀精搜，防止定位到远处同名道路
+      async function searchPoi(
+        keyword: string,
+        searchCity: string,
+        nearLng?: string,
+        nearLat?: string,
+      ): Promise<{ lng: string; lat: string } | null> {
+        try {
+          const isRoad = looksLikeRoadName(keyword);
+          // 如果是路名且有锚点，用更小的搜索半径（3km）确保在附近
+          const searchRadius = isRoad && nearLng ? "3000" : "10000";
+
+          // 优先用周边搜索（如果有锚点坐标）
+          if (nearLng && nearLat) {
+            // 对路名，搜索时加上城市前缀提高匹配精度
+            const searchKeyword = isRoad ? `${searchCity}${keyword}` : keyword;
+            const data = (await amapGet("/v3/place/around", {
+              location: `${nearLng},${nearLat}`,
+              keywords: searchKeyword,
+              radius: searchRadius,
+              key,
+              output: "json",
+              offset: "3",
+            })) as { status: string; pois?: Array<{ location: string; name: string }> };
+            if (data.status === "1" && data.pois?.[0]?.location) {
+              // 对路名结果，优先选择名称含路名关键字的 POI
+              const bestPoi = isRoad
+                ? (data.pois.find((p) => p.name.includes(keyword)) ?? data.pois[0])
+                : data.pois[0];
+              if (bestPoi) {
+                const parts = bestPoi.location.split(",");
+                const pLng = parts[0];
+                const pLat = parts[1];
+                if (pLng && pLat) {
+                  return { lng: pLng, lat: pLat };
+                }
+              }
+            }
+            // 路名的周边搜索失败，不加城市前缀再试一次
+            if (isRoad) {
+              const fallbackData = (await amapGet("/v3/place/around", {
+                location: `${nearLng},${nearLat}`,
+                keywords: keyword,
+                radius: searchRadius,
+                key,
+                output: "json",
+                offset: "1",
+              })) as { status: string; pois?: Array<{ location: string }> };
+              if (fallbackData.status === "1" && fallbackData.pois?.[0]?.location) {
+                const parts = fallbackData.pois[0].location.split(",");
+                const pLng = parts[0];
+                const pLat = parts[1];
+                if (pLng && pLat) {
+                  return { lng: pLng, lat: pLat };
+                }
+              }
+            }
+          }
+          // 降级到全城 POI 关键词搜索
+          const data = (await amapGet("/v3/place/text", {
+            keywords: keyword,
+            city: searchCity,
+            citylimit: "true",
+            key,
+            output: "json",
+            offset: "1",
+          })) as { status: string; pois?: Array<{ location: string }> };
+          if (data.status === "1" && data.pois?.[0]?.location) {
+            const parts2 = data.pois[0].location.split(",");
+            const pLng2 = parts2[0];
+            const pLat2 = parts2[1];
+            if (pLng2 && pLat2) {
+              return { lng: pLng2, lat: pLat2 };
+            }
+          }
+          // 最后降级到 geocode
+          return await geocode(keyword, key, searchCity);
+        } catch {
+          return await geocode(keyword, key, searchCity);
+        }
+      }
+
+      // 1. 逐步定位途经点（后续点参考前一个已定位点的坐标，确保聚集在同一区域）
+      const failedPoints: string[] = [];
+      const validPoints: Array<{ name: string; lng: string; lat: string; index: number }> = [];
+      let anchorLng: string | undefined;
+      let anchorLat: string | undefined;
+
+      for (let i = 0; i < waypoints.length; i++) {
+        const wp = waypoints[i] ?? `点${i + 1}`;
+        const geo = await searchPoi(wp, city, anchorLng, anchorLat);
+        if (!geo) {
+          failedPoints.push(wp);
+        } else {
+          // 距离校验：如果有锚点，检查新点是否距离过远
+          // 骑行模式允许稍远（8km），步行模式更严（5km）
+          const maxDist = mode === "cycling" ? 15000 : 5000;
+          if (anchorLng && anchorLat) {
+            const dist = haversineDistance(
+              Number(anchorLat),
+              Number(anchorLng),
+              Number(geo.lat),
+              Number(geo.lng),
+            );
+            if (dist > maxDist) {
+              // 距离过远，可能定位到了同名的其他地方，标记失败
+              failedPoints.push(`${wp}（定位过远，已跳过）`);
+              continue;
+            }
+          }
+          validPoints.push({ name: wp, lng: geo.lng, lat: geo.lat, index: i + 1 });
+          // 更新锚点为最新成功定位的点（逐步推进）
+          anchorLng = geo.lng;
+          anchorLat = geo.lat;
+        }
+      }
+
+      if (validPoints.length < 2) {
+        return jsonResult({
+          error: "途经点定位失败太多，无法生成路线",
+          failed_points: failedPoints,
+        });
+      }
+
+      // 2. 分段请求导航（根据 mode 选择骑行或步行 API）
+      type RouteStepItem = { polyline: string };
+      const segmentPolylines: string[] = [];
+
+      for (let i = 0; i < validPoints.length - 1; i++) {
+        const from = validPoints[i];
+        const to = validPoints[i + 1];
+
+        // 骑行模式依次尝试：骑行 API → 驾车 API → 步行 API
+        // 步行模式直接用步行 API
+        if (mode === "cycling") {
+          let gotRoute = false;
+
+          // 尝试骑行 API（v4）
+          if (!gotRoute) {
+            try {
+              const cycleData = (await amapGet("/v4/direction/bicycling", {
+                origin: `${from.lng},${from.lat}`,
+                destination: `${to.lng},${to.lat}`,
+                key: apiKey,
+              })) as {
+                errcode?: number;
+                data?: { paths?: Array<{ steps?: Array<{ polyline: string }> }> };
+              };
+              if (cycleData.errcode === 0 && cycleData.data?.paths?.[0]?.steps) {
+                const polyline = cycleData.data.paths[0].steps
+                  .map((s) => s.polyline)
+                  .filter(Boolean)
+                  .join(";");
+                if (polyline) {
+                  segmentPolylines.push(polyline);
+                  gotRoute = true;
+                }
+              }
+            } catch {
+              // 骑行 API 不可用，降级
+            }
+          }
+
+          // 降级到驾车 API（路线通常更适合骑行，不会走人行桥过江）
+          if (!gotRoute) {
+            try {
+              const driveData = (await amapGet("/v3/direction/driving", {
+                origin: `${from.lng},${from.lat}`,
+                destination: `${to.lng},${to.lat}`,
+                key: apiKey,
+                strategy: "0",
+                output: "json",
+              })) as {
+                status: string;
+                route?: { paths?: Array<{ steps: RouteStepItem[] }> };
+              };
+              if (driveData.status === "1" && driveData.route?.paths?.[0]) {
+                const polyline = driveData.route.paths[0].steps
+                  .map((s) => s.polyline)
+                  .filter(Boolean)
+                  .join(";");
+                if (polyline) {
+                  segmentPolylines.push(polyline);
+                  gotRoute = true;
+                }
+              }
+            } catch {
+              // 驾车 API 也失败，最终降级步行
+            }
+          }
+
+          // 最终降级到步行
+          if (!gotRoute) {
+            try {
+              const walkData = (await amapGet("/v3/direction/walking", {
+                origin: `${from.lng},${from.lat}`,
+                destination: `${to.lng},${to.lat}`,
+                key: apiKey,
+                output: "json",
+              })) as {
+                status: string;
+                route?: { paths?: Array<{ steps: RouteStepItem[] }> };
+              };
+              if (walkData.status === "1" && walkData.route?.paths?.[0]) {
+                const polyline = walkData.route.paths[0].steps
+                  .map((s) => s.polyline)
+                  .filter(Boolean)
+                  .join(";");
+                if (polyline) {
+                  segmentPolylines.push(polyline);
+                }
+              }
+            } catch {
+              // 全部失败，跳过此段
+            }
+          }
+        } else {
+          // 步行模式
+          try {
+            const walkData = (await amapGet("/v3/direction/walking", {
+              origin: `${from.lng},${from.lat}`,
+              destination: `${to.lng},${to.lat}`,
+              key: apiKey,
+              output: "json",
+            })) as {
+              status: string;
+              route?: { paths?: Array<{ steps: RouteStepItem[] }> };
+            };
+            if (walkData.status === "1" && walkData.route?.paths?.[0]) {
+              const polyline = walkData.route.paths[0].steps
+                .map((s) => s.polyline)
+                .filter(Boolean)
+                .join(";");
+              if (polyline) {
+                segmentPolylines.push(polyline);
+              }
+            }
+          } catch {
+            // 某段路线获取失败，跳过但不阻塞
+          }
+        }
+      }
+
+      // 3. 拼接所有段的 polyline
+      const fullPolyline = segmentPolylines.join(";");
+
+      // 4. 生成高德静态地图
+      try {
+        // 标注点：每个途经点一个彩色序号标注
+        const markers: string[] = [];
+        const markerColors = [
+          "0xFF4444",
+          "0x4488FF",
+          "0x44BB44",
+          "0xFF8800",
+          "0xAA44FF",
+          "0x00BBCC",
+          "0xFF44AA",
+          "0x888888",
+          "0xCC4400",
+          "0x0066CC",
+        ];
+        for (const p of validPoints) {
+          const color = markerColors[(p.index - 1) % markerColors.length] ?? "0xFF4444";
+          markers.push(`large,${color},${p.index}:${p.lng},${p.lat}`);
+        }
+
+        const staticUrl = new URL(`${AMAP_BASE}/v3/staticmap`);
+        staticUrl.searchParams.set("key", apiKey);
+        staticUrl.searchParams.set("size", "800*600");
+        staticUrl.searchParams.set("scale", "2");
+        staticUrl.searchParams.set("markers", markers.join("|"));
+
+        // 画路线（绿色线）
+        if (fullPolyline) {
+          let pathPoints = fullPolyline.split(";");
+          // 高德静态地图 API 的 URL 有长度限制，paths 参数包含过多坐标点会导致 20003 错误
+          // 将采样上限控制在 80 个点以内，确保 URL 不超长
+          if (pathPoints.length > 80) {
+            const step = Math.ceil(pathPoints.length / 80);
+            const sampled: string[] = [];
+            for (let i = 0; i < pathPoints.length; i += step) {
+              const pt = pathPoints[i];
+              if (pt) {
+                sampled.push(pt);
+              }
+            }
+            const lastPt = pathPoints[pathPoints.length - 1];
+            if (lastPt && sampled[sampled.length - 1] !== lastPt) {
+              sampled.push(lastPt);
+            }
+            pathPoints = sampled;
+          }
+          staticUrl.searchParams.set("paths", `6,0x00BB44,1,,:${pathPoints.join(";")}`);
+        }
+
+        // 下载图片
+        const imgRes = await fetch(staticUrl.toString());
+        if (!imgRes.ok) {
+          return jsonResult({ error: `${modeLabel}路线地图生成失败` });
+        }
+        const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+        // 校验是否为有效的 PNG 图片（高德 API 可能返回 200 + JSON 错误体）
+        if (
+          imgBuf.length < 100 ||
+          imgBuf[0] !== 0x89 ||
+          imgBuf[1] !== 0x50 ||
+          imgBuf[2] !== 0x4e ||
+          imgBuf[3] !== 0x47
+        ) {
+          return jsonResult({ error: `${modeLabel}路线地图生成失败：高德地图 API 返回异常` });
+        }
+
+        const fs = await import("node:fs/promises");
+        const tmpDir = "/tmp/openclaw";
+        await fs.mkdir(tmpDir, { recursive: true });
+        const tmpPath = `${tmpDir}/hiking-route-${Date.now()}.png`;
+
+        // 缩略图
+        try {
+          const sharp = (await import("sharp")).default;
+          const resized = await sharp(imgBuf)
+            .resize({ width: 800 })
+            .png({ quality: 80 })
+            .toBuffer();
+          await fs.writeFile(tmpPath, resized);
+        } catch {
+          await fs.writeFile(tmpPath, imgBuf);
+        }
+
+        // 构建途经点描述
+        const pointsDesc = validPoints.map((p) => `${p.index}. ${p.name}`).join(" → ");
+
+        const mapDesc = [
+          `${modeLabel}路线：${pointsDesc}`,
+          fullPolyline ? `，绿色线为${modeLabel}路线` : "",
+          "，彩色数字标注为各途经点。",
+        ].join("");
+
+        return jsonResult({
+          route_points: pointsDesc,
+          total_waypoints: validPoints.length,
+          mode: modeLabel,
+          ...(failedPoints.length > 0 ? { failed_points: failedPoints } : {}),
+          image_path: tmpPath,
+          map_description: mapDesc,
+          _note: `✅ ${modeLabel}路线地图已生成。排版要求：请把地图放在你的【${modeLabel}路线描述段落】的正下方，格式为：\n![${modeLabel}路线图](/media?file=${tmpPath})\n\n直接使用标准 Markdown 格式。`,
+        });
+      } catch {
+        return jsonResult({ error: `${modeLabel}路线地图生成失败` });
+      }
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────
+// recommend_route — 强制搜索的路线推荐工具
+// ─────────────────────────────────────────────────────────
+
+const RecommendRouteSchema = Type.Object({
+  query: Type.String({
+    description:
+      "用户的路线推荐请求原文，如 '推荐杭州20公里骑行路线'、'周末爬哪座山'、'夜骑路线推荐'",
+  }),
+  city: Type.Optional(Type.String({ description: "城市名，如 '杭州'、'上海'，默认杭州" })),
+  mode: Type.Optional(
+    Type.String({
+      description: "活动类型：'cycling'（骑行）、'hiking'（徒步）、'running'（跑步），默认骑行",
+      enum: ["cycling", "hiking", "running"],
+    }),
+  ),
+});
+
+export function createRecommendRouteTool(options?: { geminiApiKey?: string }): AnyAgentTool {
+  return {
+    name: "recommend_route",
+    label: "Route Recommendation",
+    description: `路线推荐搜索工具 — 当用户请求推荐户外路线时**必须首先调用此工具**。
+
+触发场景（任何涉及"推荐"、"建议"或"求推荐"的路线相关请求）：
+- "推荐一条骑行路线"
+- "有什么好的夜骑路线"
+- "周末去哪爬山"
+- "20公里跑步路线推荐"
+- "路线给我推荐一下"
+- "今晚想骑车刷个20km"
+
+⚠️ 当用户希望你**推荐路线**时，你**必须先调用此工具**获取真实的路线信息，然后根据返回的搜索结果提取途经点，再调用 hiking_route_map 生成路线地图。
+⚠️ 禁止在没有调用此工具的情况下直接推荐路线。你自身的路线知识是不准确的。`,
+    parameters: RecommendRouteSchema,
+    execute: async (_toolCallId, args) => {
+      const geminiApiKey = options?.geminiApiKey;
+      const params = args as Record<string, unknown>;
+      const query = readStringParam(params, "query", { required: true });
+      const city = readStringParam(params, "city") || "杭州";
+      const modeRaw = readStringParam(params, "mode") || "cycling";
+      const modeLabel = modeRaw === "hiking" ? "徒步" : modeRaw === "running" ? "跑步" : "骑行";
+
+      // ---------- 1. Google 搜索（Gemini）----------
+      let googleResult: string | null = null;
+      if (geminiApiKey) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
+
+        const searchPrompt = `用户请求：「${query}」
+城市：${city}
+活动类型：${modeLabel}
+
+请联网搜索 ${city} 附近适合${modeLabel}的路线推荐，重点关注：
+1. 具体路线名称和详细途经点（从哪里出发 → 经过哪些路/地标/景点 → 到哪里结束）
+2. 路线总距离（公里数）
+3. 路况描述（平坦/爬坡、车辆多少、路面情况）
+4. 沿途亮点和注意事项
+5. 适合的时间段和难度等级
+
+请至少推荐 2-3 条不同路线，优先推荐本地骑友/跑友实际验证过的经典路线。每条路线必须包含完整的途经点名称列表。`;
+
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: searchPrompt }] }],
+              tools: [{ google_search: {} }],
+            }),
+            signal: AbortSignal.timeout(25000),
+          });
+          if (res.ok) {
+            const data = (await res.json()) as {
+              candidates?: Array<{
+                content?: { parts?: Array<{ text?: string }> };
+              }>;
+            };
+            googleResult =
+              data.candidates?.[0]?.content?.parts
+                ?.map((p) => p.text)
+                .filter(Boolean)
+                .join("\n") ?? null;
+          }
+        } catch {
+          // Google 搜索失败，继续尝试小红书
+        }
+      }
+
+      // ---------- 2. 小红书搜索 ----------
+      let xhsResult: XhsSearchResult[] | null = null;
+      try {
+        const xhsKeyword = `${city} ${modeLabel} 路线推荐`;
+        xhsResult = await searchXiaohongshu(city, xhsKeyword);
+      } catch {
+        // 小红书搜索失败，静默降级
+      }
+
+      // ---------- 3. 组装结果 ----------
+      if (!googleResult && !xhsResult) {
+        return jsonResult({
+          error: "搜索失败，无法获取路线推荐",
+          note: "Google 和小红书搜索均未成功。请检查网络和 API 配置。",
+        });
+      }
+
+      const result: Record<string, unknown> = {
+        city,
+        mode: modeLabel,
+        user_query: query,
+      };
+
+      if (googleResult) {
+        result.google_search_result = googleResult;
+      }
+
+      if (xhsResult && xhsResult.length > 0) {
+        result.xiaohongshu_results = xhsResult.map((r) => ({
+          title: r.title,
+          likes: r.likes,
+        }));
+      }
+
+      result._instruction = `✅ 搜索完成。请根据以上搜索结果：
+1. 选择 1-2 条最适合用户需求的路线
+2. 提取每条路线的具体途经点名称列表
+3. 调用 hiking_route_map 工具生成路线地图（传入途经点数组 + city="${city}" + mode="${modeRaw === "hiking" ? "walking" : "cycling"}"）
+4. 在回复中介绍路线详情，并在描述下方展示地图
+5. 所有推荐必须基于搜索结果，不要自己编造路线
+
+⚠️ 搜索结果中的路线信息是真实可靠的，请直接使用。`;
+
+      return jsonResult(result);
     },
   };
 }

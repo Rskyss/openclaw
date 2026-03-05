@@ -157,6 +157,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "smart_trip",
   "event_search",
   "trip_planner",
+  "hiking_route_map",
   "session_status",
   "sessions_history",
   "sessions_list",
