@@ -2512,9 +2512,10 @@ export function createHikingRouteMapTool(): AnyAgentTool {
         if (fullPolyline) {
           let pathPoints = fullPolyline.split(";");
           // 高德静态地图 API 的 URL 有长度限制，paths 参数包含过多坐标点会导致 20003 错误
-          // 将采样上限控制在 80 个点以内，确保 URL 不超长
-          if (pathPoints.length > 80) {
-            const step = Math.ceil(pathPoints.length / 80);
+          // 将采样上限控制在 50 个点以内，确保即使 12+ 途经点也不超长
+          // 50 个点在地图分辨率下依然能画出平滑精准的路线折线
+          if (pathPoints.length > 50) {
+            const step = Math.ceil(pathPoints.length / 50);
             const sampled: string[] = [];
             for (let i = 0; i < pathPoints.length; i += step) {
               const pt = pathPoints[i];
