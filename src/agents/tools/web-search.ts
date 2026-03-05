@@ -1236,12 +1236,19 @@ async function runWebSearch(params: {
   }
 
   if (params.provider === "gemini") {
-    const geminiResult = await runGeminiSearch({
+    const geminiSearchOpts = {
       query: params.query,
       apiKey: params.apiKey,
       model: params.geminiModel ?? DEFAULT_GEMINI_MODEL,
       timeoutSeconds: params.timeoutSeconds,
-    });
+    };
+    let geminiResult: { content: string; citations: Array<{ url: string; title?: string }> };
+    try {
+      geminiResult = await runGeminiSearch(geminiSearchOpts);
+    } catch {
+      // 首次失败自动重试一次（SSRF guard / DNS pinning 偶发失败）
+      geminiResult = await runGeminiSearch(geminiSearchOpts);
+    }
 
     const payload = {
       query: params.query,

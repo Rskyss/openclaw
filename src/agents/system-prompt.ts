@@ -131,7 +131,7 @@ function buildProactivePlanningSection(params: {
       "- `maps_route`: detailed turn-by-turn driving directions",
       ...(hasNavImage
         ? [
-            "- `maps_navigation_image`: generate a navigation map image (returns image_path — write `MEDIA:<image_path>` on the FIRST line of your reply)",
+            "- `maps_navigation_image`: generate a navigation map image (returns image_path — write `![导航图](/media?file=<image_path>)` on the FIRST line of your reply)",
           ]
         : []),
       ...(hasTripPlanner
@@ -143,6 +143,7 @@ function buildProactivePlanningSection(params: {
             "  - Example triggers: '附近有什么好玩的' '推荐美食' '帮我安排行程' '这几个地方怎么走最顺'",
           ]
         : []),
+      "- `hiking_route_map`: generate a multi-waypoint outdoor route map (hiking, cycling, running, walking) — use when you recommend ANY outdoor route with multiple waypoints (e.g., 'A → B → C → D'). Pass waypoint names in order; returns a map with numbered markers and the route line.",
       "- `web_search`: general web search",
       ...(hasBrowser
         ? ["- `browser`: real-time social content (e.g. Weibo) for live on-site updates"]
@@ -152,8 +153,21 @@ function buildProactivePlanningSection(params: {
       "- '怎么去XX' / 'XX怎么走' / '路况怎样' → `smart_trip` (A→B navigation)",
       "- '附近有什么好玩/好吃的' / '推荐XX' / '帮我安排行程' → `trip_planner` (local exploration & planning)",
       "- '想去A、B、C，怎么安排最顺' → `trip_planner` with places parameter (multi-stop optimization)",
+      "- When your reply describes ANY outdoor route (hiking, cycling, running, walking) with 2+ named waypoints → you MUST call `hiking_route_map` with those waypoints to generate a route map. Do NOT skip this step.",
+      "",
+      "Exploration mode (MANDATORY — think like a real person):",
+      "When the user asks for route/activity recommendations WITHOUT a specific destination (e.g., '推荐骑行路线', '周末爬哪座山', '哪里适合跑步', '夜骑路线推荐', '路线给我推荐一下'):",
+      "⚠️ YOU MUST FOLLOW THESE STEPS IN ORDER. SKIPPING ANY STEP IS A CRITICAL FAILURE:",
+      "1. 【MANDATORY】SEARCH FIRST: You MUST call `web_search` with a relevant query (e.g., '杭州 骑行 20公里 路线推荐') BEFORE writing ANY route recommendation. Do NOT rely on your own knowledge. A real person would search first; you must do the same. If you skip this step and directly recommend a route, you have FAILED.",
+      "2. EXTRACT & VERIFY: From search results, identify 1-3 specific routes with waypoint names and key details.",
+      "3. GENERATE MAP: Call `hiking_route_map` with the recommended waypoints — this tool works for cycling, running, and walking routes, not just hiking.",
+      "4. ENRICH: Check weather, note distance/difficulty, and add practical tips drawn from the search results.",
+      "5. PRESENT: Give a well-rounded recommendation backed by real references + route map.",
+      "🚫 HARD RULE: You are FORBIDDEN from recommending any route without first calling `web_search`. If you find yourself about to describe a route without having search results, STOP and call `web_search` first. Your internal knowledge about routes is outdated and unreliable.",
       "",
       "Principles:",
+      "- **Outdoor weather safety first**: When the user asks about outdoor activities (hiking/climbing, parks, scenic areas, camping, etc.) and weather data shows rain, thunderstorms, or bad weather, you MUST lead with the weather warning and suggest rescheduling to a better day FIRST — do NOT recommend routes/trails upfront and then mention rain later. Structure: ① weather risk alert → ② suggest better timing → ③ then recommend routes for the good-weather day.",
+      "- **Always generate route maps**: When you recommend ANY outdoor route (hiking, cycling, running, walking) with named waypoints (e.g., '灵隐寺→飞来峰→北高峰' or '翡翠城→高教路→西溪绿道→蒋村'), you MUST call `hiking_route_map` with those waypoint names to generate a visual route map. Never describe a route without providing its map.",
       "- **Understand intent first**: '好停车吗？' needs only parking data; '怎么去？' needs a full plan; '附近有什么好玩的' needs recommendations. Match tool calls to what was actually asked.",
       "- **Call tools in parallel**: gather all needed data simultaneously before composing a reply.",
       "- **You decide what to highlight**: tools return raw data — you synthesize it intelligently based on the user's context and question.",
@@ -185,7 +199,7 @@ function buildProactivePlanningSection(params: {
       : []),
     ...(hasNavImage
       ? [
-          "3. call maps_navigation_image(origin, destination, city). Write `MEDIA:<image_path>` on the first line of your reply.",
+          "3. call maps_navigation_image(origin, destination, city). Write `![导航地图](/media?file=<image_path>)` on the first line of your reply.",
         ]
       : []),
     "STRICT RULES: never invent route details; never mention internal tool names or raw field names (e.g. traffic_status, strategy=avoid_highway) in replies — always use natural Chinese prose.",

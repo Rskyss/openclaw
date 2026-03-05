@@ -13,6 +13,8 @@ import {
   createXhsImageSearchTool,
   createEventSearchTool,
   createTripPlannerTool,
+  createHikingRouteMapTool,
+  createRecommendRouteTool,
 } from "./tools/amap-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
@@ -224,6 +226,10 @@ export function createOpenClawTools(options?: {
       geminiApiKey: resolveGeminiKeyForSmartTrip(options?.config),
     }),
     createTripPlannerTool(),
+    createHikingRouteMapTool(),
+    createRecommendRouteTool({
+      geminiApiKey: resolveGeminiKeyForSmartTrip(options?.config),
+    }),
   ];
 
   const pluginTools = resolvePluginTools({
