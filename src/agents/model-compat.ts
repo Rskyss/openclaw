@@ -73,7 +73,7 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   return {
     ...model,
     compat: compat
-      ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: false }
-      : { supportsDeveloperRole: false, supportsUsageInStreaming: false },
+      ? { ...compat, supportsDeveloperRole: false, supportsUsageInStreaming: false, supportsStore: false }
+      : { supportsDeveloperRole: false, supportsUsageInStreaming: false, supportsStore: false },
   } as typeof model;
 }
