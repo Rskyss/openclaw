@@ -2192,7 +2192,7 @@ const HikingRouteMapSchema = Type.Object({
 
 // 判断名称是否像路名（而非地标/景点）
 function looksLikeRoadName(name: string): boolean {
-  return /(?:路|街|道|大道|巷|弄|堤|桥|环线|绿道)$/.test(name.trim());
+  return /(?:路|街|道|大道|巷|弄|堤|桥|环线|绿道|线)$/.test(name.trim());
 }
 
 export function createHikingRouteMapTool(): AnyAgentTool {
@@ -2210,6 +2210,11 @@ export function createHikingRouteMapTool(): AnyAgentTool {
 1. 地理编码每个途经点
 2. 请求相邻点之间的导航路线（根据 mode 选择步行或骑行导航）
 3. 在地图上画出完整的路线（绿色线）并标注每个途经点的序号
+
+⚠️ 重要：途经点必须是【具体的地标/地点名称】，如 '青山湖' '万市镇' '银湖街道'。
+禁止传入抽象的路线名/道路名如 '大鱼线' '万牧线' '环湖绿道'，这些不是地点，无法被定位。
+如果路线经过某条道路（如大鱼线），请改为传入该道路上的具体地标，例如用 '临安大鱼线入口' '横畈' 等可被地图定位的地点。
+对于长距离骑行路线（50km+），请选择路线上间隔均匀的 6-8 个具体地标作为途经点。
 
 骑行路线请传 mode="cycling"，步行/徒步路线用默认的 mode="walking"。
 返回地图后，把它放在你的路线描述段落的正下方。`,
@@ -2331,7 +2336,7 @@ export function createHikingRouteMapTool(): AnyAgentTool {
         } else {
           // 距离校验：如果有锚点，检查新点是否距离过远
           // 骑行模式允许稍远（8km），步行模式更严（5km）
-          const maxDist = mode === "cycling" ? 15000 : 5000;
+          const maxDist = mode === "cycling" ? 50000 : 5000;
           if (anchorLng && anchorLat) {
             const dist = haversineDistance(
               Number(anchorLat),
@@ -2720,7 +2725,10 @@ export function createRecommendRouteTool(options?: { geminiApiKey?: string }): A
 4. 在回复中介绍路线详情，并在描述下方展示地图
 5. 所有推荐必须基于搜索结果，不要自己编造路线
 
-⚠️ 搜索结果中的路线信息是真实可靠的，请直接使用。`;
+⚠️ 搜索结果中的路线信息是真实可靠的，请直接使用。
+⚠️ 【途经点命名规则】传给 hiking_route_map 的途经点必须是可被地图定位的【具体地标/地点名】，如 '青山湖' '万市镇' '银湖街道' '横畈'。
+禁止传入抽象的路线名/道路名如 '大鱼线' '万牧线'——这些是道路名称不是地点，无法被定位。
+如果路线经过某条道路（如"走大鱼线"），请改为传入该道路沿线的具体城镇/地标名（如 '临安青山湖' '横畈镇' '万市镇'）。`;
 
       return jsonResult(result);
     },
