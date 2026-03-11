@@ -2,6 +2,12 @@
 
 OpenClaw 是一款开源的智能大模型 Agent（智能体）框架。我们基于其深度定制了**出行与生活实况能力**，使它不仅仅是一个聊天机器，更是一位懂出行的"生活管家"。
 
+## 🆕 最新动态与功能升级（当前 main 分支核心功能摘要）
+
+- **🤖 飞书 (Feishu) 机器人深度接入**：现已原生打通并支持将 OpenClaw 配置为飞书内部机器人！不仅支持基础消息和图片交互，还专门优化了“多段式”回复的分发渲染能力，确保在调用复杂的地图或搜索工具时，能够无缝完整地向飞书用户呈现“任务执行中”及“查询结果图表”，彻底解决复杂意图下的响应中断与漏发问题体验。
+- **📸 优化小红书图文助手体感**：彻底攻克服务器环境下启动无头浏览器扫码的技术痛点！现已支持以“无头模式提供终端二维码打印”的方式，直接在指令控制台中扫码进行无感刷新登录小红书 MCP 搜索服务；此外重构了搜索附带图片的加载通道，修复了“搜不到真图”和网络超时频发的痼疾。
+- **🧠 大语言模型灵活切换及稳定性强化**：除了新增对 `Doubao-1.6-flash` 等国内优秀模型的原生调用支持，这次针对类似 `Gemini-2.5-pro` 等模型使用工具时易暴露的“400 格式和校验报错”问题进行了底层的代理数据封包修正，为智能体会话“心智”的不停摆保驾护航。
+
 ## ✨ 核心特色功能
 
 ### 1. 🚲 智能路线推荐引擎（全新升级）
@@ -33,7 +39,7 @@ hiking_route_map → 高德地图画出骑行轨迹图
 
 ### 3. 🧠 多模态与超长上下文基础
 
-- 核心支持调用 `Doubao-Seed-2.0-lite` 等新一代大语言模型。
+- 核心支持调用 `Doubao-Seed-2.0-lite` / `Doubao-1.6-flash` / `Gemini-2.5-pro` / `Gemini-3.1-flash-lite` 等新一代大语言模型。
 - 长期记忆（`MEMORY`）与偏好保存：您的习惯一旦被记录，永久生效。
 
 ---
@@ -48,6 +54,7 @@ hiking_route_map → 高德地图画出骑行轨迹图
 
 - **`AMAP_API_KEY`**：高德地图 Web 服务 API Key。用于路线规划、地理编码与静态地图生成。前往 [高德开放平台](https://lbs.amap.com/) 免费申请。
 - **`GEMINI_API_KEY`**：用于 Google 联网搜索（`recommend_route` 的核心搜索引擎）以及可选的底座模型。
+- **（新增）飞书配置参数**：若要使用飞书机器人，需填写你在飞书开放平台申请的 `App ID` 和 `App Secret`，并在 OpenClaw 配置文件中补齐该渠道鉴权信息。
 
 ### 2. 启动小红书 MCP 服务（可选，但推荐）
 
@@ -57,7 +64,7 @@ hiking_route_map → 高德地图画出骑行轨迹图
 # 进入小红书 MCP 目录
 cd tools/xiaohongshu-mcp
 
-# 首次使用需要登录
+# （更新）无浏览器环境：直接运行即可终端扫码登录授权
 ./xiaohongshu-login-darwin-arm64
 
 # 后台启动 MCP 服务（默认端口 18060）
@@ -96,12 +103,11 @@ node scripts/run-node.mjs gateway
 | **小红书 (XHS)**    | 骑友评价员 | `recommend_route` → XHS MCP (port 18060) |
 | **高德 (Amap)**     | 地图工程师 | `hiking_route_map` → Amap REST API       |
 
-### 主要代码改动
+### 近期代码主要重构点
 
-- `src/agents/tools/amap-tool.ts`：新增 `recommend_route` 工具（内置 Google + 小红书搜索）、`hiking_route_map` 支持骑行模式、优化静态地图折线采样（防止 URL 超长报 `20003` 错误）、PNG 魔数校验防止保存损坏图片。
-- `src/agents/openclaw-tools.ts`：注册 `recommend_route` 工具。
-- `src/agents/system-prompt.ts`：强化 Exploration 模式指令，强制 AI 在推荐路线前必须先搜索。
-- `src/agents/tools/web-search.ts`：Gemini 搜索添加自动重试逻辑。
+- `extensions/feishu/`: 完整实现并重构了飞书机器人的 API 通讯流水线，增加针对大量图文并发时的消息截点调度能力（Outbound 和 Dispatcher），彻底治理工具加载“吞消息”和流未正确封装。
+- `src/agents/pi-embedded-runner/`: 系统内核底层增加针对 Gemini 回复的流数据封包适配器转换（Proxy Stream Wrapper）。
+- `src/agents/tools/amap-tool.ts`：更新底层地图支持与防图片乱码机制。
 
 ### 排版控制
 
