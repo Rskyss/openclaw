@@ -7,6 +7,16 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Gateway/node pending work: add narrow in-memory pending-work queue primitives (`node.pending.enqueue` / `node.pending.drain`) and wake-helper reuse as a foundation for dormant-node work delivery. (#41409) Thanks @mbelinky.
+- Feishu/位置卡片: 新增 `sendLocationFeishu` 和 `[[LOC:...]]` 标记解析，agent 推荐地点时自动发送带高德地图链接的位置卡片；`maps_search` 和 `maps_route` 结果自动附带定位标记。
+- Feishu/小红书图片: `reply-dispatcher` 和 `outbound` 支持从 agent 回复文本中提取 `/media?file=` 本地图片并直接上传发送，不再依赖模型写 markdown；XHS 图片附带标题和原帖链接卡片。
+- Feishu/消息解析: 支持解析用户发来的位置消息（`messageType=location`），转为文字描述传给 agent。
+- XHS/MCP 自动重启: `ensureXhsMcpRunning()` 在 MCP 进程未运行时自动拉起二进制，搜索超时从 15s 提升至 30s。
+- XHS/登录工具: 新增 `xhs_login` 和 `xhs_check_login` 工具，cookie 失效时 agent 自动发送二维码让用户扫码重新登录。
+- XHS/图片展示: `xhs_image_search` 工具结果同时返回 image content blocks，确保模型能看到图片；`smart_trip` 小红书搜索失败时提示 agent 调用登录工具。
+- Agents/system-prompt: 推荐具体地点时强制调用 `maps_search` 生成可点击地图卡片。
+- UI/markdown: Web UI 支持渲染 `/media?file=` 路径的本地图片。
+- UI/chat: `chatShowThinking` 默认关闭；tool cards 显示与 showThinking 联动。
+- Agents/pi-ai: 适配新版 `@mariozechner/pi-ai` 的 `onPayload(payload, model)` 双参数签名。
 
 ### Breaking
 
