@@ -202,6 +202,27 @@ OpenClaw is a multi-channel AI gateway that runs on the user’s own device. Use
 - If publish fails (HTTP 422): missing `severity`/`description`/`vulnerabilities[]`, or private fork has open PRs
 - Verify: re-fetch; ensure `state=published`, `published_at` set; `jq -r .description | rg '\\\\n'` returns nothing
 
+## Local Tooling: xiaohongshu-mcp
+
+- Binary: `tools/xiaohongshu-mcp/xiaohongshu-mcp-darwin-arm64` (macOS arm64 only; not committed to upstream).
+- Login helper: `tools/xiaohongshu-mcp/xiaohongshu-login-darwin-arm64` (terminal QR scan; writes `cookies.json` in that dir).
+- The MCP server listens on `http://127.0.0.1:18060/mcp`. The agent auto-starts it if not running.
+- Logs: `tools/xiaohongshu-mcp/mcp.log`.
+- `cookies.json` must exist (from login) before the server can fetch content. Do not commit it.
+- The `searchXiaohongshu` function (`src/agents/tools/amap-tool.ts`) manages auto-start and image download (base64 return to bypass CDN restrictions).
+
+## Feishu Extension Architecture
+
+- Source: `extensions/feishu/src/` (~50 files). Key modules:
+  - `bot.ts`: message parsing, mention detection, reply routing
+  - `send.ts` + `outbound.ts`: outbound message delivery pipeline
+  - `reply-dispatcher.ts`: multi-segment reply dispatching (prevents message loss during tool calls)
+  - `streaming-card.ts`: Feishu interactive card streaming
+  - `docx*.ts` / `wiki.ts` / `drive.ts`: document/knowledge-base integration
+  - `monitor.ts`: event loop and webhook handling
+  - `dynamic-agent.ts`: per-chat dynamic agent configuration
+- When modifying send/reply flow, always check `outbound.ts`, `reply-dispatcher.ts`, and `send.ts` together — they form a single pipeline.
+
 ## Troubleshooting
 
 - Rebrand/migration issues or legacy config/service warnings: run `openclaw doctor` (see `docs/gateway/doctor.md`).

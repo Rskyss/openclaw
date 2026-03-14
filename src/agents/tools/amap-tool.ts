@@ -240,15 +240,33 @@ export function createMapsSearchTool(): AnyAgentTool {
             return jsonResult({ error: `未找到"${near}"附近的"${keywords}"`, near, keywords });
           }
 
-          const results = data.pois.map((p) => ({
-            name: p.name,
-            address: Array.isArray(p.address) ? "" : p.address,
-            distance: fmtDistance(Number(p.distance)),
-            type: p.type,
-            tel: Array.isArray(p.tel) ? "" : p.tel,
-          }));
+          const results = data.pois.map((p) => {
+            const [pLng, pLat] = (p.location || "").split(",");
+            return {
+              name: p.name,
+              address: Array.isArray(p.address) ? "" : p.address,
+              distance: fmtDistance(Number(p.distance)),
+              type: p.type,
+              tel: Array.isArray(p.tel) ? "" : p.tel,
+              lat: pLat ?? "",
+              lng: pLng ?? "",
+            };
+          });
 
-          return jsonResult({ near: geo.formatted, keywords, radius: `${radius}米`, results });
+          const topPoi = data.pois[0];
+          const [topLng, topLat] = (topPoi?.location || "").split(",");
+          const topAddr = topPoi ? (Array.isArray(topPoi.address) ? "" : topPoi.address) : "";
+          return jsonResult({
+            near: geo.formatted,
+            keywords,
+            radius: `${radius}米`,
+            results,
+            ...(topPoi && topLat && topLng
+              ? {
+                  _SYSTEM_LOCATION_CARD: `在你的最终文字回复末尾，另起一行原样输出此定位标记（不要修改内容）：[[LOC:{"title":"${topPoi.name}","lat":"${topLat}","lng":"${topLng}","address":"${topAddr}"}]]`,
+                }
+              : {}),
+          });
         } else {
           // Keyword search
           const reqParams: Record<string, string> = {
@@ -278,15 +296,33 @@ export function createMapsSearchTool(): AnyAgentTool {
             return jsonResult({ error: `未找到"${keywords}"相关地点`, keywords, city });
           }
 
-          const results = data.pois.map((p) => ({
-            name: p.name,
-            address: Array.isArray(p.address) ? "" : p.address,
-            city: p.cityname,
-            type: p.type,
-            tel: Array.isArray(p.tel) ? "" : p.tel,
-          }));
+          const results = data.pois.map((p) => {
+            const [pLng, pLat] = (p.location || "").split(",");
+            return {
+              name: p.name,
+              address: Array.isArray(p.address) ? "" : p.address,
+              city: p.cityname,
+              type: p.type,
+              tel: Array.isArray(p.tel) ? "" : p.tel,
+              lat: pLat ?? "",
+              lng: pLng ?? "",
+            };
+          });
 
-          return jsonResult({ keywords, city, results });
+          const topPoi = data.pois[0];
+          const [topLng, topLat] = (topPoi?.location || "").split(",");
+          const topAddr = topPoi ? (Array.isArray(topPoi.address) ? "" : topPoi.address) : "";
+          const topCity = topPoi?.cityname ?? "";
+          return jsonResult({
+            keywords,
+            city,
+            results,
+            ...(topPoi && topLat && topLng
+              ? {
+                  _SYSTEM_LOCATION_CARD: `在你的最终文字回复末尾，另起一行原样输出此定位标记（不要修改内容）：[[LOC:{"title":"${topPoi.name}","lat":"${topLat}","lng":"${topLng}","address":"${topCity}${topAddr}"}]]`,
+                }
+              : {}),
+          });
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
@@ -466,6 +502,7 @@ export function createMapsRouteTool(): AnyAgentTool {
 
         return jsonResult({
           _SYSTEM_NEXT_REQUIRED_ACTION: `⚡ 你现在必须立即调用 maps_navigation_image 工具！参数：origin="${originAddr}", destination="${destAddr}"${city ? `, city="${city}"` : ""}。这是强制要求，不是可选的。调用完成前不要输出任何文字。`,
+          _SYSTEM_LOCATION_CARD: `在你的最终文字回复末尾，另起一行原样输出此定位标记（不要修改内容）：[[LOC:{"title":"${destAddr}","lat":"${destGeo.lat}","lng":"${destGeo.lng}","address":"${destGeo.formatted}"}]]`,
           geocoded_origin: originGeo.formatted,
           geocoded_destination: destGeo.formatted,
           internal_note:
@@ -998,16 +1035,77 @@ interface XhsSearchResult {
   likes: string;
   comments: string;
   cover_url: string;
+  cover_base64?: string; // ← 新增：MCP 返回的 base64 图片数据
+  note_id?: string; // ← 帖子 ID，用于构造小红书链接
 }
 
 const XHS_MCP_URL = "http://127.0.0.1:18060/mcp";
-const XHS_TIMEOUT_MS = 15000;
+const XHS_TIMEOUT_MS = 30000;
+
+// 小红书 MCP 二进制路径（用 process.cwd() 避免打包后 import.meta.url 路径错误）
+const XHS_MCP_BIN = `${process.cwd()}/tools/xiaohongshu-mcp/xiaohongshu-mcp-darwin-arm64`;
+
+// 确保 xiaohongshu-mcp 进程在运行，若未启动则自动拉起
+async function ensureXhsMcpRunning(): Promise<void> {
+  // 先探测端口是否可用
+  try {
+    const res = await fetch(XHS_MCP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 0 }),
+      signal: AbortSignal.timeout(2000),
+    });
+    if (res.ok || res.status === 400) {
+      return;
+    } // 服务已在运行
+  } catch {
+    // 端口不通，继续尝试启动
+  }
+
+  // 检查二进制是否存在
+  const fs = await import("node:fs/promises");
+  try {
+    await fs.access(XHS_MCP_BIN);
+  } catch {
+    return; // 二进制不存在，放弃（会在 searchXiaohongshu 里静默降级）
+  }
+
+  // 用 shell 启动，避免 macOS 上 detached+fd 继承问题
+  const { spawn } = await import("node:child_process");
+  const logPath = XHS_MCP_BIN.replace(/xiaohongshu-mcp-darwin-arm64$/, "mcp.log");
+  const child = spawn("/bin/sh", ["-c", `"${XHS_MCP_BIN}" >> "${logPath}" 2>&1`], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env },
+  });
+  child.unref();
+
+  // 等待服务启动（最多 8 秒）
+  for (let i = 0; i < 16; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      const res = await fetch(XHS_MCP_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 0 }),
+        signal: AbortSignal.timeout(1000),
+      });
+      if (res.ok || res.status === 400) {
+        return;
+      }
+    } catch {
+      // 继续等待
+    }
+  }
+}
 
 export async function searchXiaohongshu(
   destination: string,
   rawKeyword?: string,
 ): Promise<XhsSearchResult[] | null> {
   try {
+    await ensureXhsMcpRunning();
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), XHS_TIMEOUT_MS);
 
@@ -1058,6 +1156,7 @@ export async function searchXiaohongshu(
       });
 
       if (!searchRes.ok) {
+        console.error(`❌ xhs search failed: HTTP ${searchRes.status}`);
         return null;
       }
       const data = (await searchRes.json()) as {
@@ -1065,37 +1164,75 @@ export async function searchXiaohongshu(
         error?: { message: string };
       };
 
-      if (data.error || !data.result?.content?.[0]?.text) {
+      if (data.error) {
+        console.error(`❌ xhs MCP error: ${data.error.message}`);
+        return null;
+      }
+
+      if (!data.result?.content?.[0]?.text) {
+        console.error(`❌ xhs MCP invalid response format:`, JSON.stringify(data).slice(0, 200));
         return null;
       }
 
       // 3. 解析搜索结果
       const feedsText = data.result.content[0].text;
-      const feedsData = JSON.parse(feedsText) as {
-        feeds?: Array<{
-          noteCard?: {
-            displayTitle?: string;
-            interactInfo?: {
-              likedCount?: string;
-              commentCount?: string;
-            };
-            cover?: {
-              urlDefault?: string;
-            };
-          };
-        }>;
-      };
+      console.log(`🔍 xhs search raw response (first 300 chars): ${feedsText.slice(0, 300)}`);
 
-      if (!feedsData.feeds?.length) {
+      type FeedItem = {
+        id?: string;
+        noteCard?: {
+          displayTitle?: string;
+          interactInfo?: { likedCount?: string; commentCount?: string };
+          cover?: { urlDefault?: string };
+          cover_base64?: string;
+          id?: string;
+        };
+      };
+      let feedsData: { feeds?: FeedItem[] };
+      try {
+        feedsData = JSON.parse(feedsText) as { feeds?: FeedItem[] };
+      } catch (e) {
+        console.error(`❌ xhs JSON parse error:`, e);
         return null;
       }
 
-      return feedsData.feeds.slice(0, 5).map((f) => ({
-        title: f.noteCard?.displayTitle || "",
-        likes: f.noteCard?.interactInfo?.likedCount || "0",
-        comments: f.noteCard?.interactInfo?.commentCount || "0",
-        cover_url: f.noteCard?.cover?.urlDefault || "",
-      }));
+      if (!feedsData.feeds?.length) {
+        console.log(`⚠️ xhs search returned no feeds`);
+        return null;
+      }
+
+      console.log(`✅ xhs search found ${feedsData.feeds.length} feeds`);
+
+      // 取前10条、按赞数排序，再随机打乱取5条——保证高赞优先进入候选池，但每次展示不重复
+      const pool = feedsData.feeds
+        .slice(0, 10)
+        .map((f) => ({
+          title: f.noteCard?.displayTitle || "",
+          likes: f.noteCard?.interactInfo?.likedCount || "0",
+          comments: f.noteCard?.interactInfo?.commentCount || "0",
+          cover_url: f.noteCard?.cover?.urlDefault || "",
+          cover_base64: f.noteCard?.cover_base64,
+          note_id: f.id || f.noteCard?.id || "",
+        }))
+        .toSorted((a, b) => (parseInt(b.likes) || 0) - (parseInt(a.likes) || 0));
+      // Fisher-Yates 随机打乱后取前5
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      const results = pool.slice(0, 5);
+
+      // 诊断日志：检查是否收到 base64 数据
+      const hasBase64 = results.some((r) => r.cover_base64);
+      if (hasBase64) {
+        console.log(
+          `✅ MCP 返回了 base64 数据，共 ${results.filter((r) => r.cover_base64).length} 条`,
+        );
+      } else {
+        console.log(`⚠️ MCP 未返回 base64 数据，只有 URL`);
+      }
+
+      return results;
     } finally {
       clearTimeout(timer);
     }
@@ -1304,7 +1441,10 @@ export function createSmartTripTool(): AnyAgentTool {
               _xhs_note:
                 "以上是小红书近期热帖摘要，请提炼与出行相关的有用信息（停车/路况/避坑/推荐），融入出行建议中。",
             }
-          : {}),
+          : {
+              _xhs_login_hint:
+                "小红书搜索未返回结果（可能未登录或 cookie 已过期）。请调用 xhs_login 工具获取登录二维码，让用户扫码登录后重试。",
+            }),
         ...(arrivalTimeStr ? { target_arrival_time: arrivalTimeStr } : {}),
         ...(Object.keys(suggestedDepartures).length > 0
           ? { suggested_departure_by_mode: suggestedDepartures }
@@ -1329,6 +1469,43 @@ const XhsImageSearchSchema = Type.Object({
   ),
 });
 
+// 处理 base64 编码的图片数据（来自 MCP）
+async function processBase64Image(base64Data: string, index: number): Promise<string | null> {
+  if (!base64Data) {
+    return null;
+  }
+  try {
+    const fs = await import("node:fs/promises");
+    const tmpDir = "/tmp/openclaw";
+    await fs.mkdir(tmpDir, { recursive: true });
+
+    // 提取 base64 部分（移除 "data:image/...;base64," 前缀）
+    const base64Part = base64Data.includes(",") ? base64Data.split(",")[1] : base64Data;
+    const buf = Buffer.from(base64Part, "base64");
+
+    if (buf.length < 1000) {
+      return null; // 图片太小
+    }
+
+    const outPath = `${tmpDir}/xhs-${Date.now()}-${index}.webp`;
+
+    // 用 sharp 处理：缩小 + 压缩
+    try {
+      const sharp = (await import("sharp")).default;
+      const resized = await sharp(buf).resize({ width: 800 }).webp({ quality: 85 }).toBuffer();
+      await fs.writeFile(outPath, resized);
+    } catch {
+      // sharp 失败就保存原图
+      await fs.writeFile(outPath, buf);
+    }
+
+    return outPath;
+  } catch (error) {
+    logWarn(`processBase64Image failed: ${String(error)}`);
+    return null;
+  }
+}
+
 async function downloadXhsImage(url: string, index: number): Promise<string | null> {
   if (!url) {
     return null;
@@ -1336,13 +1513,24 @@ async function downloadXhsImage(url: string, index: number): Promise<string | nu
   try {
     const res = await fetch(url, {
       headers: {
-        Referer: "https://www.xiaohongshu.com",
         "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        Referer: "https://www.xiaohongshu.com/",
+        Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Sec-Fetch-Dest": "image",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Site": "cross-site",
+        "Cache-Control": "no-cache",
+        "Sec-Ch-Ua": '"Not A(Brand";v="8", "Chromium";v="125", "Google Chrome";v="125"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
       },
       signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
+      logWarn(`downloadXhsImage: HTTP ${res.status} for url: ${url.slice(0, 80)}`);
       return null;
     }
     const buf = Buffer.from(await res.arrayBuffer());
@@ -1356,7 +1544,7 @@ async function downloadXhsImage(url: string, index: number): Promise<string | nu
     // 使用 sharp 缩小为 300px 宽的缩略图
     try {
       const sharp = (await import("sharp")).default;
-      const resized = await sharp(buf).resize({ width: 180 }).webp({ quality: 75 }).toBuffer();
+      const resized = await sharp(buf).resize({ width: 800 }).webp({ quality: 85 }).toBuffer();
       await fs.writeFile(outPath, resized);
     } catch {
       // sharp 失败时保留原图
@@ -1372,12 +1560,18 @@ export function createXhsImageSearchTool(): AnyAgentTool {
   return {
     name: "xhs_image_search",
     label: "Xiaohongshu Image Search",
-    description: `小红书图片搜索工具 — 当用户想看某个地方或活动的实拍照片时调用。
+    description: `小红书图片搜索工具 — 当用户想看某个地方、路线或活动的实拍照片时调用。
 搜索小红书热门帖子并下载封面图到本地，返回本地图片路径。
 
-使用场景：用户说"有没有XX的照片/实拍/图片"、"给我看看XX长什么样"等。
-返回结果包含多张图片路径，你必须用 Markdown 图片格式展示每张图片（例如：![图片说明](/media?file=<路径>)）。
-展示图片时请附上简短的图片说明（来源帖子标题），让用户知道图片内容。`,
+使用场景：
+- "有没有XX的照片/实拍/图片"
+- "给我看看XX长什么样" / "给我看看路线" / "给我看看"
+- "XX的风景怎么样" / "路线什么样的" / "爬山路线实拍"
+- 用户说"看看"、"图片"、"照片"等词并结合地点/路线名
+
+【关键】返回结果包含图片路径，你必须在回复中逐张展示。格式为：
+![标题|||链接](/media?file=/tmp/openclaw/xhs-xxx.webp)
+每张图片必须单独一行，不要省略，不要用文字描述代替图片。这是唯一能让用户看到图片的方式。`,
     parameters: XhsImageSearchSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -1388,13 +1582,17 @@ export function createXhsImageSearchTool(): AnyAgentTool {
       const results = await searchXiaohongshu(keyword, keyword);
       if (!results || results.length === 0) {
         return jsonResult({
-          error: "未搜索到相关小红书内容，小红书 MCP 服务可能未启动",
-          suggestion: "请确认小红书 MCP 服务已启动（端口 18060）",
+          error: "无法搜索小红书内容（可能未登录或 MCP 服务未启动）",
+          suggestion:
+            "【重要】禁止使用浏览器搜索！请立即调用 xhs_login 工具获取小红书登录二维码，然后提示用户扫码登录。",
+          required_next_action: "xhs_login",
+          reason:
+            "小红书搜索功能只能通过 MCP 服务实现，不支持网页搜索。请用户使用小红书官方 App 登录后才能查看内容。",
         });
       }
 
-      // 筛选有封面图的帖子
-      const withCover = results.filter((r) => r.cover_url);
+      // 筛选有封面图的帖子（优先用 base64，其次用 URL）
+      const withCover = results.filter((r) => r.cover_base64 || r.cover_url);
       if (withCover.length === 0) {
         return jsonResult({
           error: "搜索到帖子但未找到可用图片",
@@ -1402,21 +1600,34 @@ export function createXhsImageSearchTool(): AnyAgentTool {
         });
       }
 
-      // 并行下载图片
+      // 并行处理图片：优先使用 base64，降级使用 URL
       const toDownload = withCover.slice(0, count);
       const downloadResults = await Promise.all(
-        toDownload.map((r, i) => downloadXhsImage(r.cover_url, i)),
+        toDownload.map(async (r, i) => {
+          // 优先使用 base64（来自 MCP）
+          if (r.cover_base64) {
+            return await processBase64Image(r.cover_base64, i);
+          }
+          // 降级：如果没有 base64，才尝试下载 URL
+          return await downloadXhsImage(r.cover_url, i);
+        }),
       );
 
-      const images: Array<{ image_path: string; caption: string; likes: string }> = [];
+      const images: Array<{
+        image_path: string;
+        caption: string;
+        likes: string;
+        note_url: string;
+      }> = [];
       for (let i = 0; i < toDownload.length; i++) {
-        const path = downloadResults[i];
+        const imgPath = downloadResults[i];
         const post = toDownload[i];
-        if (path && post) {
+        if (imgPath && post) {
           images.push({
-            image_path: path,
+            image_path: imgPath,
             caption: post.title,
             likes: post.likes,
+            note_url: post.note_id ? `https://www.xiaohongshu.com/explore/${post.note_id}` : "",
           });
         }
       }
@@ -1429,18 +1640,39 @@ export function createXhsImageSearchTool(): AnyAgentTool {
       }
 
       const { sanitizeToolResultImages } = await import("../../agents/tool-images.js");
-      const content: Array<{ type: string; text: string }> = [];
+      const fs = await import("node:fs/promises");
+      const content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [];
 
+      // 先放文字摘要
       content.push({
         type: "text",
         text:
-          `✅ 成功为您找到 ${images.length} 张现场照片（已缩为缩略图）。\n` +
-          `【排版指令】请你在适当位置展示图片。图片已经被缩小为缩略图，请把下面这一行 Markdown 代码原样粘贴到你的回复中（所有图片必须放在同一行，中间用空格隔开，这样它们会横排显示）：\n\n` +
-          images.map((img) => `![${img.caption}](/media?file=${img.image_path})`).join(" ") +
-          `\n\n严格使用标准 Markdown 格式显示图片，上面的 Markdown 图片代码必须完全放在同一行。\n\n` +
-          `图片信息：\n` +
-          images.map((img, i) => `照片${i + 1}：${img.caption}（${img.likes}赞）`).join("\n"),
+          `✅ 成功为您找到 ${images.length} 张现场照片。\n` +
+          images
+            .map(
+              (img, i) =>
+                `照片${i + 1}：${img.caption}（${img.likes}赞）${img.note_url ? ` ${img.note_url}` : ""}`,
+            )
+            .join("\n") +
+          `\n\n请在回复中用以下 Markdown 展示每张图片：\n` +
+          images
+            .map((img) => `![${img.caption}|||${img.note_url}](/media?file=${img.image_path})`)
+            .join("\n"),
       });
+
+      // 把图片作为 image content blocks 直接嵌入，确保即使模型不写 markdown 也能展示
+      for (const img of images) {
+        try {
+          const buf = await fs.readFile(img.image_path);
+          content.push({
+            type: "image",
+            data: buf.toString("base64"),
+            mimeType: "image/webp",
+          });
+        } catch {
+          // 读取失败则跳过
+        }
+      }
 
       const result = {
         content,
@@ -1453,6 +1685,189 @@ export function createXhsImageSearchTool(): AnyAgentTool {
         result as Parameters<typeof sanitizeToolResultImages>[0],
         "xhs-images",
       );
+    },
+  };
+}
+
+// ─── Tool 5.6: xhs_login — 小红书二维码登录（通过 MCP 服务） ────────────────────
+
+// 调用 xiaohongshu-mcp 服务的通用帮助函数
+async function callXhsMcpTool(
+  toolName: string,
+  args: Record<string, unknown> = {},
+): Promise<Array<{ type: string; text?: string; data?: string; mimeType?: string }> | null> {
+  await ensureXhsMcpRunning();
+
+  try {
+    const initRes = await fetch(XHS_MCP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "xhs-login", version: "1.0" },
+        },
+        id: 1,
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!initRes.ok) {
+      return null;
+    }
+    const sessionId = initRes.headers.get("mcp-session-id");
+    if (!sessionId) {
+      return null;
+    }
+
+    const toolRes = await fetch(XHS_MCP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Mcp-Session-Id": sessionId },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: toolName, arguments: args },
+        id: 2,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!toolRes.ok) {
+      return null;
+    }
+
+    const data = (await toolRes.json()) as {
+      result?: {
+        content?: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+      };
+    };
+    return data.result?.content ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const XhsLoginSchema = Type.Object({});
+
+export function createXhsLoginTool(): AnyAgentTool {
+  return {
+    name: "xhs_login",
+    label: "小红书登录",
+    description: `小红书二维码登录工具 — 当用户需要登录小红书，或小红书 MCP 提示未登录时调用。
+无需打开浏览器，直接在聊天窗口发送二维码图片给用户扫码，登录成功后自动保存 cookie。
+
+使用场景：
+- 用户说"登录小红书"
+- xhs_image_search 或 smart_trip 提示"未登录"、"cookie 失效"
+- 首次配置小红书搜索功能时`,
+    parameters: XhsLoginSchema,
+    execute: async (_toolCallId, _args) => {
+      const content = await callXhsMcpTool("get_login_qrcode");
+      if (!content) {
+        return jsonResult({ error: "小红书 MCP 服务未响应，请稍后重试" });
+      }
+
+      const imageItem = content.find((c) => c.type === "image");
+      const textItem = content.find((c) => c.type === "text");
+
+      if (!imageItem?.data) {
+        return jsonResult({
+          error: "未获取到二维码图片",
+          detail: textItem?.text ?? "MCP 服务返回内容异常",
+        });
+      }
+
+      // 保存图片到本地，放大到 400×400 避免 Feishu 灰色框问题
+      const fs = await import("node:fs/promises");
+      const tmpDir = "/tmp/openclaw";
+      await fs.mkdir(tmpDir, { recursive: true });
+      const qrImagePath = `${tmpDir}/xhs-qrcode-${Date.now()}.png`;
+      const rawBuf = Buffer.from(imageItem.data, "base64");
+      try {
+        const sharp = (await import("sharp")).default;
+        const upscaled = await sharp(rawBuf)
+          .resize(400, 400, { kernel: "nearest" })
+          .png()
+          .toBuffer();
+        await fs.writeFile(qrImagePath, upscaled);
+      } catch {
+        await fs.writeFile(qrImagePath, rawBuf);
+      }
+
+      const expireHint = textItem?.text ?? "二维码有效期约 3 分钟";
+
+      const instructionText =
+        `✅ 小红书登录二维码已生成！${expireHint}\n\n` +
+        `![小红书登录二维码](/media?file=${qrImagePath})\n\n` +
+        `📱 打开小红书 App → 首页右上角"+"→ 扫一扫\n\n` +
+        `扫码成功后告诉我，我将调用 xhs_check_login 确认登录状态。`;
+
+      return {
+        content: [{ type: "text", text: instructionText }],
+        details: { status: "waiting_scan" },
+      };
+    },
+  };
+}
+
+// ─── Tool 5.7: xhs_check_login — 检查小红书登录状态 ──────────────────────────
+
+const XhsCheckLoginSchema = Type.Object({
+  qr_id: Type.Optional(Type.String({ description: "保留字段，可不传" })),
+});
+
+export function createXhsCheckLoginTool(): AnyAgentTool {
+  return {
+    name: "xhs_check_login",
+    label: "小红书登录状态检查",
+    description: `检查小红书扫码登录状态 — 用户告知已扫码后调用。
+调用 MCP 服务确认登录结果，成功后 cookie 由 MCP 服务自动保存。
+
+使用场景：
+- 用户说"我扫码了"、"已扫码"、"扫好了"
+- 需要配合 xhs_login 工具使用`,
+    parameters: XhsCheckLoginSchema,
+    execute: async (_toolCallId, _args) => {
+      const content = await callXhsMcpTool("check_login_status");
+      if (!content) {
+        return jsonResult({ error: "小红书 MCP 服务未响应，请稍后重试" });
+      }
+
+      const text = content.find((c) => c.type === "text")?.text ?? "";
+
+      // MCP 服务返回登录成功的文字中通常包含用户名或"登录成功"
+      const isSuccess =
+        text.includes("登录成功") ||
+        text.includes("已登录") ||
+        text.includes("login success") ||
+        text.includes("logged in");
+
+      const isExpired =
+        text.includes("过期") || text.includes("expired") || text.includes("二维码失效");
+
+      if (isExpired) {
+        return jsonResult({
+          error: "二维码已过期，请重新调用 xhs_login 获取新二维码",
+          status: "expired",
+        });
+      }
+
+      if (isSuccess) {
+        return jsonResult({
+          status: "success",
+          message:
+            "✅ 小红书登录成功！Cookie 已由 MCP 服务自动保存，小红书搜索功能现在可以正常使用了。",
+          detail: text,
+        });
+      }
+
+      // 返回原始 MCP 响应让 AI 判断
+      return jsonResult({
+        status: "pending",
+        message: text || "尚未检测到登录成功，请确认手机上已完成扫码确认。",
+        suggestion: "如果已在手机上点击确认，请再次调用 xhs_check_login 检查。",
+      });
     },
   };
 }
@@ -2618,18 +3033,21 @@ export function createRecommendRouteTool(options?: { geminiApiKey?: string }): A
   return {
     name: "recommend_route",
     label: "Route Recommendation",
-    description: `路线推荐搜索工具 — 当用户请求推荐户外路线时**必须首先调用此工具**。
+    description: `路线推荐搜索工具 — 当用户询问户外路线、爬山地点、骑行去哪时**必须首先调用此工具**。
 
-触发场景（任何涉及"推荐"、"建议"或"求推荐"的路线相关请求）：
+触发场景（只要涉及户外活动地点推荐或路线推荐，全部调用）：
 - "推荐一条骑行路线"
 - "有什么好的夜骑路线"
-- "周末去哪爬山"
+- "周末去哪爬山" / "哪里适合爬山" / "哪些地方适合爬山"
+- "哪里好玩" / "推荐个地方" / "附近有什么山"
 - "20公里跑步路线推荐"
 - "路线给我推荐一下"
 - "今晚想骑车刷个20km"
+- 天气好/周末想出去/想爬山/想骑车 + 询问去哪或什么路线
 
-⚠️ 当用户希望你**推荐路线**时，你**必须先调用此工具**获取真实的路线信息，然后根据返回的搜索结果提取途经点，再调用 hiking_route_map 生成路线地图。
-⚠️ 禁止在没有调用此工具的情况下直接推荐路线。你自身的路线知识是不准确的。`,
+⚠️ 当用户询问**去哪爬山/骑行/跑步**或**推荐路线/地点**时，你**必须先调用此工具**，禁止直接从自身知识回答。
+⚠️ 调用完成后，必须再调用 hiking_route_map 生成路线地图，并展示地图图片。
+⚠️ 禁止在没有调用此工具的情况下直接推荐路线或地点。你自身的路线知识是不准确的。`,
     parameters: RecommendRouteSchema,
     execute: async (_toolCallId, args) => {
       const geminiApiKey = options?.geminiApiKey;
@@ -2722,8 +3140,9 @@ export function createRecommendRouteTool(options?: { geminiApiKey?: string }): A
 1. 选择 1-2 条最适合用户需求的路线
 2. 提取每条路线的具体途经点名称列表
 3. 调用 hiking_route_map 工具生成路线地图（传入途经点数组 + city="${city}" + mode="${modeRaw === "hiking" ? "walking" : "cycling"}"）
-4. 在回复中介绍路线详情，并在描述下方展示地图
-5. 所有推荐必须基于搜索结果，不要自己编造路线
+4. 调用 xhs_image_search 工具搜索路线实拍照片（关键词用路线名 + "实拍" 或 "风景"），展示给用户
+5. 在回复中介绍路线详情，在路线描述下方展示地图，在适当位置展示实拍照片
+6. 所有推荐必须基于搜索结果，不要自己编造路线
 
 ⚠️ 搜索结果中的路线信息是真实可靠的，请直接使用。
 ⚠️ 【途经点命名规则】传给 hiking_route_map 的途经点必须是可被地图定位的【具体地标/地点名】，如 '青山湖' '万市镇' '银湖街道' '横畈'。

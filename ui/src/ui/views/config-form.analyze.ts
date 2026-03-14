@@ -97,10 +97,10 @@ function normalizeSchemaNode(
     if (!itemsSchema) {
       unsupported.add(pathLabel);
     } else {
-      const res = normalizeSchemaNode(itemsSchema, [...path, 0]);
+      const res = normalizeSchemaNode(itemsSchema, [...path, "*"]);
       normalized.items = res.schema ?? itemsSchema;
-      for (const entry of res.unsupportedPaths) {
-        unsupported.add(entry);
+      if (res.unsupportedPaths.length > 0) {
+        unsupported.add(pathLabel);
       }
     }
   } else if (

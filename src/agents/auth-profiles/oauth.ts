@@ -1,4 +1,6 @@
+// @ts-ignore
 import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai/oauth";
+// @ts-ignore
 import { getOAuthApiKey, getOAuthProviders } from "@mariozechner/pi-ai/oauth";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";

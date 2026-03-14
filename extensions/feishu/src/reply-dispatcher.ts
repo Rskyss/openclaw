@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import {
   createReplyPrefixContext,
   createTypingCallbacks,
@@ -11,11 +13,53 @@ import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
+import { extractLocationMarkers } from "./outbound.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
+import {
+  sendLocationFeishu,
+  sendMarkdownCardFeishu,
+  sendMessageFeishu,
+  sendCardFeishu,
+} from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
+
+/** Resolve /media?file=<path> URLs (from agent tools) to bare local paths that loadWebMedia accepts */
+function resolveMediaUrl(mediaUrl: string): string {
+  if (mediaUrl.startsWith("/media?file=")) {
+    return decodeURIComponent(mediaUrl.slice("/media?file=".length));
+  }
+  return mediaUrl;
+}
+
+/** Extract local markdown images from text and return cleaned text + media list */
+function extractMarkdownLocalImages(text: string): {
+  cleaned: string;
+  mediaUrls: string[];
+  mediaAlts: Array<{ title: string; noteUrl: string }>;
+} {
+  const localMediaRegex = /!\[(.*?)\]\(\/media\?file=([^\s)]+)\)/g;
+  const mediaUrls: string[] = [];
+  const mediaAlts: Array<{ title: string; noteUrl: string }> = [];
+  const cleaned = text.replace(localMediaRegex, (_, alt: string, encoded: string) => {
+    const localPath = decodeURIComponent(encoded);
+    // Validate path is absolute and file exists
+    if (path.isAbsolute(localPath) && fs.existsSync(localPath)) {
+      // Alt may be "TITLE|||NOTE_URL" for XHS images
+      const sepIdx = (alt || "").indexOf("|||");
+      const title = sepIdx >= 0 ? alt.slice(0, sepIdx) : alt || "";
+      const noteUrl = sepIdx >= 0 ? alt.slice(sepIdx + 3) : "";
+      mediaUrls.push(localPath);
+      mediaAlts.push({ title, noteUrl });
+      // For XHS images: remove placeholder from text; for others: show [图片: alt]
+      return localPath.includes("/xhs-") ? "" : `[图片: ${title || "附件"}]`;
+    }
+    // Keep original markdown if file doesn't exist
+    return _;
+  });
+  return { cleaned, mediaUrls, mediaAlts };
+}
 
 /** Detect if text contains markdown elements that benefit from card rendering */
 function shouldUseCard(text: string): boolean {
@@ -211,8 +255,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       await streamingStartPromise;
     }
     await partialUpdateQueue;
+    let pendingLocations: Array<{ title: string; lat: string; lng: string; address: string }> = [];
     if (streaming?.isActive()) {
-      let text = streamText;
+      const { cleaned, locations } = extractLocationMarkers(streamText);
+      pendingLocations = locations;
+      let text = cleaned;
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
@@ -222,6 +269,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamingStartPromise = null;
     streamText = "";
     lastPartial = "";
+    // Send location cards after streaming card is finalized
+    for (const loc of pendingLocations) {
+      try {
+        await sendLocationFeishu({
+          cfg,
+          to: chatId,
+          title: loc.title,
+          lat: loc.lat,
+          lng: loc.lng,
+          address: loc.address,
+          replyToMessageId: sendReplyToMessageId,
+          accountId,
+        });
+      } catch (err) {
+        params.runtime.error?.(`feishu: failed to send location card: ${String(err)}`);
+      }
+    }
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -244,8 +308,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             : payload.mediaUrl
               ? [payload.mediaUrl]
               : [];
-        const hasText = Boolean(text.trim());
-        const hasMedia = mediaList.length > 0;
+
+        // Extract any local markdown images from text
+        const {
+          cleaned: textWithoutMarkdownImages,
+          mediaUrls: extractedMediaUrls,
+          mediaAlts: extractedMediaAlts,
+        } = extractMarkdownLocalImages(text);
+
+        const hasText = Boolean(textWithoutMarkdownImages.trim());
+        const hasMedia = mediaList.length > 0 || extractedMediaUrls.length > 0;
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
         const shouldDeliverText = hasText && !skipTextForDuplicateFinal;
@@ -255,7 +327,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (shouldDeliverText) {
-          const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+          const useCard =
+            renderMode === "card" ||
+            (renderMode === "auto" && shouldUseCard(textWithoutMarkdownImages));
 
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
@@ -280,33 +354,45 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, { mode: "delta" });
+              queueStreamingUpdate(textWithoutMarkdownImages, { mode: "delta" });
             }
             if (info?.kind === "final") {
-              streamText = mergeStreamingText(streamText, text);
+              streamText = mergeStreamingText(streamText, textWithoutMarkdownImages);
               await closeStreaming();
               deliveredFinalTexts.add(text);
             }
-            // Send media even when streaming handled the text
-            if (hasMedia) {
-              for (const mediaUrl of mediaList) {
-                await sendMediaFeishu({
-                  cfg,
-                  to: chatId,
-                  mediaUrl,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  accountId,
-                });
-              }
+            // Send all media (both from payload and extracted from markdown)
+            for (const mediaUrl of mediaList) {
+              await sendMediaFeishu({
+                cfg,
+                to: chatId,
+                mediaUrl: resolveMediaUrl(mediaUrl),
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                accountId,
+                mediaLocalRoots: ["/tmp"],
+              });
+            }
+            for (const mediaPath of extractedMediaUrls) {
+              await sendMediaFeishu({
+                cfg,
+                to: chatId,
+                mediaUrl: mediaPath,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                accountId,
+                mediaLocalRoots: ["/tmp"],
+              });
             }
             return;
           }
 
+          const { cleaned: cleanText, locations: pendingLocations } =
+            extractLocationMarkers(textWithoutMarkdownImages);
           let first = true;
           if (useCard) {
             for (const chunk of core.channel.text.chunkTextWithMode(
-              text,
+              cleanText,
               textChunkLimit,
               chunkMode,
             )) {
@@ -325,7 +411,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               deliveredFinalTexts.add(text);
             }
           } else {
-            const converted = core.channel.text.convertMarkdownTables(text, tableMode);
+            const converted = core.channel.text.convertMarkdownTables(cleanText, tableMode);
             for (const chunk of core.channel.text.chunkTextWithMode(
               converted,
               textChunkLimit,
@@ -346,18 +432,73 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               deliveredFinalTexts.add(text);
             }
           }
+          // Send location cards after text delivery
+          for (const loc of pendingLocations) {
+            try {
+              await sendLocationFeishu({
+                cfg,
+                to: chatId,
+                title: loc.title,
+                lat: loc.lat,
+                lng: loc.lng,
+                address: loc.address,
+                replyToMessageId: sendReplyToMessageId,
+                accountId,
+              });
+            } catch (err) {
+              params.runtime.error?.(`feishu: failed to send location card: ${String(err)}`);
+            }
+          }
         }
 
         if (hasMedia) {
+          // Send media from payload
           for (const mediaUrl of mediaList) {
             await sendMediaFeishu({
               cfg,
               to: chatId,
-              mediaUrl,
+              mediaUrl: resolveMediaUrl(mediaUrl),
               replyToMessageId: sendReplyToMessageId,
               replyInThread: effectiveReplyInThread,
               accountId,
+              mediaLocalRoots: ["/tmp"],
             });
+          }
+          // Send media extracted from markdown, with caption for XHS images
+          for (let i = 0; i < extractedMediaUrls.length; i++) {
+            const mediaPath = extractedMediaUrls[i];
+            await sendMediaFeishu({
+              cfg,
+              to: chatId,
+              mediaUrl: mediaPath,
+              replyToMessageId: sendReplyToMessageId,
+              replyInThread: effectiveReplyInThread,
+              accountId,
+              mediaLocalRoots: ["/tmp"],
+            });
+            // For XHS images, send a caption card with title + link below the image
+            if (mediaPath.includes("/xhs-")) {
+              const meta = extractedMediaAlts[i];
+              if (meta?.title) {
+                const lines = [`**${meta.title}**`];
+                if (meta.noteUrl) lines.push(`[🔗 查看小红书原帖](${meta.noteUrl})`);
+                try {
+                  await sendCardFeishu({
+                    cfg,
+                    to: chatId,
+                    card: {
+                      schema: "2.0",
+                      config: { wide_screen_mode: false },
+                      body: { elements: [{ tag: "markdown", content: lines.join("\n") }] },
+                    },
+                    replyToMessageId: sendReplyToMessageId,
+                    accountId,
+                  });
+                } catch (err) {
+                  params.runtime.error?.(`feishu: failed to send xhs caption: ${String(err)}`);
+                }
+              }
+            }
           }
         }
       },

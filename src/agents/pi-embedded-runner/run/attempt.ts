@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
@@ -228,16 +229,22 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
   return (model, context, options) =>
     streamFn(model, context, {
       ...options,
-      onPayload: (payload: unknown, payloadModel) => {
+      onPayload: (payload: unknown, payloadModel?: Model<Api>) => {
         if (!payload || typeof payload !== "object") {
-          return options?.onPayload?.(payload, payloadModel);
+          return (options?.onPayload as ((p: unknown, m?: Model<Api>) => unknown) | undefined)?.(
+            payload,
+            payloadModel,
+          );
         }
         const payloadRecord = payload as Record<string, unknown>;
         if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
           payloadRecord.options = {};
         }
         (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-        return options?.onPayload?.(payload, payloadModel);
+        return (options?.onPayload as ((p: unknown, m?: Model<Api>) => unknown) | undefined)?.(
+          payload,
+          payloadModel,
+        );
       },
     });
 }

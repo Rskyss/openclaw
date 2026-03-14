@@ -304,6 +304,7 @@ export function renderChat(props: ChatProps) {
             return renderMessageGroup(item, {
               onOpenSidebar: props.onOpenSidebar,
               showReasoning,
+              showToolCards: props.showThinking,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
             });
@@ -563,7 +564,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
       continue;
     }
 
-    if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+    if (!props.showThinking && normalizeRoleForGrouping(normalized.role) === "tool") {
       continue;
     }
 

@@ -1,4 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 
@@ -73,7 +74,7 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload, payloadModel) => {
+      onPayload: (payload: unknown, payloadModel?: Model<Api>) => {
         const messages = (payload as Record<string, unknown>)?.messages;
         if (Array.isArray(messages)) {
           for (const msg of messages as Array<{ role?: string; content?: unknown }>) {
@@ -92,7 +93,10 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
             }
           }
         }
-        return originalOnPayload?.(payload, payloadModel);
+        return (originalOnPayload as ((p: unknown, m?: Model<Api>) => unknown) | undefined)?.(
+          payload,
+          payloadModel,
+        );
       },
     });
   };
@@ -111,9 +115,12 @@ export function createOpenRouterWrapper(
         ...OPENROUTER_APP_HEADERS,
         ...options?.headers,
       },
-      onPayload: (payload, payloadModel) => {
+      onPayload: (payload: unknown, payloadModel?: Model<Api>) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, payloadModel);
+        return (onPayload as ((p: unknown, m?: Model<Api>) => unknown) | undefined)?.(
+          payload,
+          payloadModel,
+        );
       },
     });
   };
@@ -136,9 +143,12 @@ export function createKilocodeWrapper(
         ...options?.headers,
         ...resolveKilocodeAppHeaders(),
       },
-      onPayload: (payload, payloadModel) => {
+      onPayload: (payload: unknown, payloadModel?: Model<Api>) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, payloadModel);
+        return (onPayload as ((p: unknown, m?: Model<Api>) => unknown) | undefined)?.(
+          payload,
+          payloadModel,
+        );
       },
     });
   };

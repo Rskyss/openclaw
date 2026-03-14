@@ -154,6 +154,8 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "maps_route",
   "maps_navigation_image",
   "xhs_image_search",
+  "xhs_login",
+  "xhs_check_login",
   "smart_trip",
   "event_search",
   "trip_planner",

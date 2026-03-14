@@ -1,5 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { Api, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -151,11 +151,14 @@ function createStreamFnWithExtraParams(
       return underlying(effectiveModel, context, {
         ...streamParams,
         ...options,
-        onPayload: (payload) => {
+        onPayload: (payload: unknown, payloadModel?: Model<Api>) => {
           if (payload && typeof payload === "object") {
             (payload as Record<string, unknown>).thinking = thinkingPayload;
           }
-          originalOnPayload?.(payload);
+          (originalOnPayload as ((p: unknown, m?: Model<Api>) => unknown) | undefined)?.(
+            payload,
+            payloadModel,
+          );
         },
       });
     }
@@ -243,7 +246,7 @@ function createGoogleThinkingPayloadWrapper(
     const onPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload, payloadModel) => {
+      onPayload: (payload: unknown, payloadModel?: Model<Api>) => {
         if (model.api === "google-generative-ai") {
           sanitizeGoogleThinkingPayload({
             payload,
@@ -251,7 +254,10 @@ function createGoogleThinkingPayloadWrapper(
             thinkingLevel,
           });
         }
-        return onPayload?.(payload, payloadModel);
+        return (onPayload as ((p: unknown, m?: Model<Api>) => unknown) | undefined)?.(
+          payload,
+          payloadModel,
+        );
       },
     });
   };
@@ -279,12 +285,15 @@ function createZaiToolStreamWrapper(
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload, payloadModel) => {
+      onPayload: (payload: unknown, payloadModel?: Model<Api>) => {
         if (payload && typeof payload === "object") {
           // Inject tool_stream: true for Z.AI API
           (payload as Record<string, unknown>).tool_stream = true;
         }
-        return originalOnPayload?.(payload, payloadModel);
+        return (originalOnPayload as ((p: unknown, m?: Model<Api>) => unknown) | undefined)?.(
+          payload,
+          payloadModel,
+        );
       },
     });
   };
@@ -327,11 +336,14 @@ function createParallelToolCallsWrapper(
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
-      onPayload: (payload, payloadModel) => {
+      onPayload: (payload: unknown, payloadModel?: Model<Api>) => {
         if (payload && typeof payload === "object") {
           (payload as Record<string, unknown>).parallel_tool_calls = enabled;
         }
-        return originalOnPayload?.(payload, payloadModel);
+        return (originalOnPayload as ((p: unknown, m?: Model<Api>) => unknown) | undefined)?.(
+          payload,
+          payloadModel,
+        );
       },
     });
   };
@@ -457,10 +469,7 @@ export function applyExtraParamsToAgent(
   // upstream model-ID heuristics for Gemini 3.1 variants.
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
 
-  // Volcengine Doubao reasoning_effort support
-  if (provider === "volcengine" && thinkingLevel) {
-    agent.streamFn = createVolcengineReasoningWrapper(agent.streamFn, thinkingLevel);
-  }
+  // Volcengine Doubao reasoning_effort: handled natively by pi-ai via compat.thinkingFormat
 
   const openAIServiceTier = resolveOpenAIServiceTier(merged);
   if (openAIServiceTier) {

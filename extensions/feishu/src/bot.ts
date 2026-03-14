@@ -318,6 +318,22 @@ function parseMessageContent(content: string, messageType: string): string {
     if (messageType === "text") {
       return parsed.text || "";
     }
+    if (messageType === "location") {
+      const loc = parsed as {
+        title?: string;
+        latitude?: number;
+        longitude?: number;
+        address?: string;
+      };
+      const parts: string[] = [];
+      if (loc.title) parts.push(loc.title);
+      if (loc.address) parts.push(loc.address);
+      const coords =
+        loc.latitude !== undefined && loc.longitude !== undefined
+          ? `lat:${loc.latitude} lng:${loc.longitude}`
+          : "";
+      return `[用户分享了位置: ${parts.join(", ")}${coords ? ` (${coords})` : ""}]`;
+    }
     if (messageType === "share_chat") {
       // Preserve available summary text for merged/forwarded chat messages.
       if (parsed && typeof parsed === "object") {

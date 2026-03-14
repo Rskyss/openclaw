@@ -439,6 +439,54 @@ export async function sendMarkdownCardFeishu(params: {
 }
 
 /**
+ * Build a Feishu interactive card for a location, with title, address, and a navigation link.
+ * Feishu Bot API does not support msg_type "location", so we use an interactive card instead.
+ */
+function buildLocationCard(params: {
+  title: string;
+  lat: string;
+  lng: string;
+  address: string;
+}): Record<string, unknown> {
+  const { title, lat, lng, address } = params;
+  const mapUrl = `https://uri.amap.com/marker?position=${lng},${lat}&name=${encodeURIComponent(title)}&callnative=0`;
+  const lines = [`**${title}**`];
+  if (address) lines.push(`📍 ${address}`);
+  lines.push(`[🗺️ 在高德地图中查看](${mapUrl})`);
+  return {
+    schema: "2.0",
+    config: { wide_screen_mode: false },
+    body: {
+      elements: [
+        {
+          tag: "markdown",
+          content: lines.join("\n"),
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * Send a location card message (shows location info with Gaode map navigation link).
+ * Uses interactive card since Feishu Bot API does not support msg_type "location".
+ */
+export async function sendLocationFeishu(params: {
+  cfg: ClawdbotConfig;
+  to: string;
+  title: string;
+  lat: string;
+  lng: string;
+  address: string;
+  replyToMessageId?: string;
+  accountId?: string;
+}): Promise<FeishuSendResult> {
+  const { cfg, to, title, lat, lng, address, replyToMessageId, accountId } = params;
+  const card = buildLocationCard({ title, lat, lng, address });
+  return sendCardFeishu({ cfg, to, card, replyToMessageId, accountId });
+}
+
+/**
  * Edit an existing text message.
  * Note: Feishu only allows editing messages within 24 hours.
  */

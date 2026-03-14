@@ -12,6 +12,8 @@ import {
   createMapsNavImageTool,
   createSmartTripTool,
   createXhsImageSearchTool,
+  createXhsLoginTool,
+  createXhsCheckLoginTool,
   createEventSearchTool,
   createTripPlannerTool,
   createHikingRouteMapTool,
@@ -224,6 +226,8 @@ export function createOpenClawTools(
     createMapsNavImageTool(),
     createSmartTripTool(),
     createXhsImageSearchTool(),
+    createXhsLoginTool(),
+    createXhsCheckLoginTool(),
     createEventSearchTool({
       geminiApiKey: resolveGeminiKeyForSmartTrip(options?.config),
     }),

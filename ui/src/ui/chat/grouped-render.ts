@@ -153,6 +153,7 @@ export function renderMessageGroup(
   opts: {
     onOpenSidebar?: (content: string) => void;
     showReasoning: boolean;
+    showToolCards?: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
   },
@@ -186,6 +187,7 @@ export function renderMessageGroup(
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
+              showToolCards: opts.showToolCards ?? true,
             },
             opts.onOpenSidebar,
           ),
@@ -267,7 +269,7 @@ function renderMessageImages(images: ImageBlock[]) {
 
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean },
+  opts: { isStreaming: boolean; showReasoning: boolean; showToolCards?: boolean },
   onOpenSidebar?: (content: string) => void,
 ) {
   const m = message as Record<string, unknown>;
@@ -279,7 +281,8 @@ function renderGroupedMessage(
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
 
-  const toolCards = extractToolCards(message);
+  const showToolCards = opts.showToolCards ?? true;
+  const toolCards = showToolCards ? extractToolCards(message) : [];
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;

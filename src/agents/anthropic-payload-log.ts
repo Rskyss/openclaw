@@ -136,7 +136,7 @@ export function createAnthropicPayloadLogger(params: {
       if (!isAnthropicModel(model)) {
         return streamFn(model, context, options);
       }
-      const nextOnPayload = (payload: unknown, payloadModel: Parameters<StreamFn>[0]) => {
+      const nextOnPayload = (payload: unknown, payloadModel: Model<Api>) => {
         const redactedPayload = redactImageDataForDiagnostics(payload);
         record({
           ...base,
@@ -145,11 +145,14 @@ export function createAnthropicPayloadLogger(params: {
           payload: redactedPayload,
           payloadDigest: digest(redactedPayload),
         });
-        return options?.onPayload?.(payload, payloadModel);
+        return (
+          options?.onPayload as ((payload: unknown, model: Model<Api>) => unknown) | undefined
+        )?.(payload, payloadModel);
       };
       return streamFn(model, context, {
         ...options,
-        onPayload: nextOnPayload,
+        // cast: IDE may still resolve old pi-ai types (1-param); runtime uses 2-param signature
+        onPayload: nextOnPayload as (payload: unknown) => void,
       });
     };
     return wrapped;
